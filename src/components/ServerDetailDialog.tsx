@@ -36,24 +36,6 @@ import { useWebSocketContext } from "@/contexts/WebSocketContext";
 // 使用从 api.ts 导入的 BotStatus 作为 ServerConfig 的别名
 type ServerConfig = BotStatus;
 
-function formatDateTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString();
-}
-
-function formatReconnectDetail(server: ServerConfig) {
-  if (!server.reconnecting) return "";
-  const attempt = server.reconnectAttempts || 1;
-  const next = server.nextReconnectAt ? new Date(server.nextReconnectAt) : null;
-  if (next && !Number.isNaN(next.getTime())) {
-    const seconds = Math.max(0, Math.ceil((next.getTime() - Date.now()) / 1000));
-    return `第 ${attempt} 次，${seconds}s 后重试`;
-  }
-  return `第 ${attempt} 次`;
-}
-
 interface ServerDetailDialogProps {
   server: ServerConfig | null;
   open: boolean;
@@ -100,9 +82,6 @@ export function ServerDetailDialog({
   const configuredUsername = server?.configuredUsername || "";
   const runtimeUsername = server?.runtimeUsername || "";
   const displayUsername = runtimeUsername || configuredUsername;
-  const reconnectDetail = server ? formatReconnectDetail(server) : "";
-  const reconnectReason = server?.lastReconnectError || server?.lastReconnectReason || "";
-  const lastReconnectAt = formatDateTime(server?.lastReconnectAt);
 
   // 切换标签或打开面板时重置滚动位置
   useEffect(() => {
@@ -244,10 +223,9 @@ export function ServerDetailDialog({
             <SheetTitle className="flex items-center gap-3 text-xl">
               <div
                 className={`w-3 h-3 rounded-full shadow-lg ${server.connected ? "bg-emerald-500 shadow-emerald-500/50" :
-                  server.reconnecting ? "bg-amber-500 shadow-amber-500/50 animate-pulse" :
-                    isPanel && server.tcpOnline ? "bg-emerald-500 shadow-emerald-500/50" :
-                      isPanel && server.panelServerState === "running" ? "bg-yellow-500 shadow-yellow-500/50" :
-                        "bg-muted-foreground/30"
+                  isPanel && server.tcpOnline ? "bg-emerald-500 shadow-emerald-500/50" :
+                    isPanel && server.panelServerState === "running" ? "bg-yellow-500 shadow-yellow-500/50" :
+                      "bg-muted-foreground/30"
                   }`}
               />
               {server.name || server.id}
@@ -356,22 +334,6 @@ export function ServerDetailDialog({
                         <span className="text-muted-foreground text-xs uppercase tracking-wider">用户名</span>
                         <span className="font-medium">{displayUsername}</span>
                       </div>
-                    )}
-                    {!isPanel && (server.reconnecting || reconnectReason || lastReconnectAt) && (
-                      <>
-                        <div className="flex flex-col gap-1">
-                          <span className="text-muted-foreground text-xs uppercase tracking-wider">重连</span>
-                          <span className="font-medium text-amber-500">
-                            {reconnectDetail || (lastReconnectAt ? `上次 ${lastReconnectAt}` : "待机")}
-                          </span>
-                        </div>
-                        {reconnectReason && (
-                          <div className="flex flex-col gap-1 min-w-0">
-                            <span className="text-muted-foreground text-xs uppercase tracking-wider">原因</span>
-                            <span className="truncate text-muted-foreground">{reconnectReason}</span>
-                          </div>
-                        )}
-                      </>
                     )}
                     {server.connected && server.position && (
                       <div className="flex flex-col gap-1">

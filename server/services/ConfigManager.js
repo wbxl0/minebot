@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { normalizeServerEndpoint } from '../utils/endpoint.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -402,15 +401,14 @@ export class ConfigManager {
     // 确保每个服务器有完整的独立配置
     // type: 'minecraft' (默认，游戏服务器) | 'panel' (纯面板服务器)
     const serverType = serverConfig.type || 'minecraft';
-    const endpoint = normalizeServerEndpoint(serverConfig.host, serverConfig.port, { allowUndefinedPort: true });
 
     const fullConfig = {
       id: serverConfig.id,
       name: serverConfig.name || `Server ${serverConfig.id}`,
       type: serverType,
       // 游戏服务器需要的字段
-      host: serverType === 'minecraft' ? endpoint.host : (serverConfig.host || ''),
-      port: serverType === 'minecraft' ? (endpoint.port || 0) : (serverConfig.port || 0),
+      host: serverConfig.host || '',
+      port: serverConfig.port || 25565,
       username: serverConfig.username || '',
       version: serverConfig.version || false,
       // 独立的模式设置
@@ -549,32 +547,22 @@ export class ConfigManager {
 
     // 深度合并更新
     const current = this.config.servers[index];
-    const normalizedUpdates = { ...updates };
-    if (updates.host !== undefined || updates.port !== undefined) {
-      const endpoint = normalizeServerEndpoint(
-        updates.host !== undefined ? updates.host : current.host,
-        updates.port !== undefined ? updates.port : current.port,
-        { allowUndefinedPort: true }
-      );
-      normalizedUpdates.host = endpoint.host;
-      normalizedUpdates.port = endpoint.port || 0;
-    }
     this.config.servers[index] = {
       ...current,
-      ...normalizedUpdates,
+      ...updates,
       // 确保嵌套对象也被正确合并
-      modes: { ...current.modes, ...(normalizedUpdates.modes || {}) },
-      autoChat: { ...current.autoChat, ...(normalizedUpdates.autoChat || {}) },
-      restartTimer: { ...current.restartTimer, ...(normalizedUpdates.restartTimer || {}) },
-      pterodactyl: normalizedUpdates.pterodactyl === null
+      modes: { ...current.modes, ...(updates.modes || {}) },
+      autoChat: { ...current.autoChat, ...(updates.autoChat || {}) },
+      restartTimer: { ...current.restartTimer, ...(updates.restartTimer || {}) },
+      pterodactyl: updates.pterodactyl === null
         ? null
-        : { ...current.pterodactyl, ...(normalizedUpdates.pterodactyl || {}) },
-      sftp: { ...current.sftp, ...(normalizedUpdates.sftp || {}) },
-      rcon: { ...current.rcon, ...(normalizedUpdates.rcon || {}) },
-      agentId: normalizedUpdates.agentId !== undefined ? normalizedUpdates.agentId : current.agentId,
-      commandSettings: { ...current.commandSettings, ...(normalizedUpdates.commandSettings || {}) },
-      behaviorSettings: { ...current.behaviorSettings, ...(normalizedUpdates.behaviorSettings || {}) },
-      proxyNodeId: normalizedUpdates.proxyNodeId !== undefined ? normalizedUpdates.proxyNodeId : current.proxyNodeId
+        : { ...current.pterodactyl, ...(updates.pterodactyl || {}) },
+      sftp: { ...current.sftp, ...(updates.sftp || {}) },
+      rcon: { ...current.rcon, ...(updates.rcon || {}) },
+      agentId: updates.agentId !== undefined ? updates.agentId : current.agentId,
+      commandSettings: { ...current.commandSettings, ...(updates.commandSettings || {}) },
+      behaviorSettings: { ...current.behaviorSettings, ...(updates.behaviorSettings || {}) },
+      proxyNodeId: updates.proxyNodeId !== undefined ? updates.proxyNodeId : current.proxyNodeId
     };
     console.log(`[ConfigManager] 更新服务器 ${id} 配置项:`, Object.keys(updates));
     this.saveConfig();
