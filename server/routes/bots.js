@@ -1,3 +1,5 @@
+import { normalizeServerEndpoint } from '../utils/endpoint.js';
+
 const MINECRAFT_USERNAME_REGEX = /^[a-zA-Z0-9_]{3,16}$/;
 
 function normalizeMinecraftUsername(value) {
@@ -36,6 +38,11 @@ export function registerBotRoutes(app, {
   app.post('/api/bots/add', async (req, res) => {
     try {
       const requestConfig = { ...(req.body || {}) };
+      if ((requestConfig.type || 'minecraft') === 'minecraft') {
+        const endpoint = normalizeServerEndpoint(requestConfig.host, requestConfig.port, { allowUndefinedPort: true });
+        requestConfig.host = endpoint.host;
+        requestConfig.port = endpoint.port || 0;
+      }
       const normalizedUsername = normalizeMinecraftUsername(requestConfig.username);
       const usernameError = validateMinecraftUsername(normalizedUsername);
       if (usernameError) {
@@ -111,8 +118,13 @@ export function registerBotRoutes(app, {
       const updates = {};
       if (name !== undefined) updates.name = name;
       if (username !== undefined) updates.username = username;
-      if (host !== undefined) updates.host = host;
-      if (port !== undefined) updates.port = parseInt(port);
+      if (host !== undefined) {
+        const endpoint = normalizeServerEndpoint(host, port, { allowUndefinedPort: true });
+        updates.host = endpoint.host;
+        updates.port = endpoint.port || 0;
+      } else if (port !== undefined) {
+        updates.port = parseInt(port);
+      }
       if (body.proxyNodeId !== undefined) updates.proxyNodeId = body.proxyNodeId;
       if (body.autoReconnect !== undefined) updates.autoReconnect = !!body.autoReconnect;
 
@@ -133,8 +145,8 @@ export function registerBotRoutes(app, {
               bot.status.username = username;
             }
           }
-          if (host !== undefined) bot.config.host = host;
-          if (port !== undefined) bot.config.port = parseInt(port);
+          if (updates.host !== undefined) bot.config.host = updates.host;
+          if (updates.port !== undefined) bot.config.port = updates.port;
 
           if (body.proxyNodeId !== undefined) bot.config.proxyNodeId = body.proxyNodeId;
           if (body.autoReconnect !== undefined) {

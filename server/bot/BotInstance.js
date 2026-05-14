@@ -4,8 +4,12 @@ const { pathfinder, Movements, goals } = pkg;
 import { BehaviorManager } from './behaviors/index.js';
 import axios from 'axios';
 import SftpClient from 'ssh2-sftp-client';
+import socks from 'socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { proxyService } from '../services/ProxyService.js';
+import { normalizeServerEndpoint } from '../utils/endpoint.js';
+
+const { SocksClient } = socks;
 
 // 协议数据缓存，内存紧张时清空
 const mcDataCache = new Map();
@@ -67,6 +71,9 @@ export class BotInstance {
     // 深拷贝config，防止外部修改影响连接地址
     this.config = JSON.parse(JSON.stringify(config));
     this.config.username = String(this.config.username || '').trim();
+    const endpoint = normalizeServerEndpoint(this.config.host, this.config.port, { allowUndefinedPort: true });
+    this.config.host = endpoint.host;
+    this.config.port = endpoint.port || 0;
     this.aiService = aiService;
     this.onLog = onLog;
     this.onStatusChange = onStatusChange;
@@ -86,6 +93,10 @@ export class BotInstance {
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
     this.reconnectAttempts = 0; // 重连次数
+    this.lastReconnectReason = '';
+    this.lastReconnectError = '';
+    this.nextReconnectAt = null;
+    this.lastReconnectAt = null;
     this.lastEmergencyRescueAt = 0;
     this.lastCreativeFallbackAt = 0;
     this.lastSurvivalCheckAt = 0;
@@ -417,6 +428,17 @@ export class BotInstance {
     return /disconnect\.spam|spam|刷屏/i.test(this.normalizeReason(reason));
   }
 
+  clearReconnectState({ keepLast = true } = {}) {
+    this.isRepairing = false;
+    this.reconnectAttempts = 0;
+    this.lastReconnectError = '';
+    this.nextReconnectAt = null;
+    if (!keepLast) {
+      this.lastReconnectReason = '';
+      this.lastReconnectAt = null;
+    }
+  }
+
   getStatus() {
     const configuredUsername = this.config.username || '';
     const runtimeUsername = this.status.connected ? (this.status.username || '') : '';
@@ -433,7 +455,13 @@ export class BotInstance {
       autoChat: this.autoChatConfig,
       behaviors: this.behaviors?.getStatus() || null,
       proxyNodeId: this.config.proxyNodeId || '',
-      autoReconnect: !!this.config.autoReconnect
+      autoReconnect: !!this.config.autoReconnect,
+      reconnecting: !!this.isRepairing,
+      reconnectAttempts: this.reconnectAttempts || 0,
+      lastReconnectReason: this.lastReconnectReason || '',
+      lastReconnectError: this.lastReconnectError || '',
+      nextReconnectAt: this.nextReconnectAt || null,
+      lastReconnectAt: this.lastReconnectAt || null
     };
   }
 
@@ -450,8 +478,15 @@ export class BotInstance {
         this.status.username = this.config.username;
       }
     }
-    if (updates.host !== undefined) this.config.host = updates.host;
-    if (updates.port !== undefined) this.config.port = parseInt(updates.port);
+    if (updates.host !== undefined || updates.port !== undefined) {
+      const endpoint = normalizeServerEndpoint(
+        updates.host !== undefined ? updates.host : this.config.host,
+        updates.port !== undefined ? updates.port : this.config.port,
+        { allowUndefinedPort: true }
+      );
+      this.config.host = endpoint.host;
+      this.config.port = endpoint.port || 0;
+    }
     if (updates.proxyNodeId !== undefined) this.config.proxyNodeId = updates.proxyNodeId;
     if (updates.autoReconnect !== undefined) {
       this.status.autoReconnect = !!updates.autoReconnect;
@@ -566,6 +601,8 @@ export class BotInstance {
     this.isRepairing = true;
     this.status.connected = false;
     this.reconnectAttempts++;
+    this.lastReconnectReason = reasonText;
+    this.lastReconnectError = reasonText;
 
     if (!this.nextUsername) {
       const prepared = this.prepareNextUsername(reasonText);
@@ -584,6 +621,7 @@ export class BotInstance {
       delaySeconds = Math.max(delaySeconds, SPAM_KICK_RECONNECT_DELAY_MS / 1000);
     }
     const backoff = delaySeconds * 1000;
+    this.nextReconnectAt = new Date(Date.now() + backoff).toISOString();
 
     this.log('warning', `连接异常 (${reasonText})，${delaySeconds}秒后重连 (第${this.reconnectAttempts}次)...`, '🔄');
 
@@ -596,17 +634,20 @@ export class BotInstance {
 
     this.reconnectTimeout = setTimeout(async () => {
       if (this.destroyed) {
-        this.isRepairing = false;
+        this.clearReconnectState({ keepLast: false });
         return;
       }
 
       try {
+        this.lastReconnectAt = new Date().toISOString();
+        this.nextReconnectAt = null;
+        if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
         await this.connect();
         this.log('success', '重连成功', '✅');
-        this.reconnectAttempts = 0;
-        this.isRepairing = false;
+        this.clearReconnectState();
       } catch (err) {
         this.log('error', `重连失败: ${err.message}`, '✗');
+        this.lastReconnectError = err.message || '重连失败';
         this.isRepairing = false;
 
         // 如果开启了自动持久重连，则再次触发重连逻辑
@@ -622,6 +663,7 @@ export class BotInstance {
    */
   softDisconnect() {
     this.status.connected = false;
+    this.clearReconnectState();
     this.cleanup();
     this.log('info', '正在刷新连接...', '🔄');
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
@@ -654,9 +696,12 @@ export class BotInstance {
     await new Promise(r => setTimeout(r, 200));
 
     // 只使用手动配置的地址，不使用面板API获取的地址
-    const host = this.config.host;
+    const endpoint = normalizeServerEndpoint(this.config.host, this.config.port, { allowUndefinedPort: true });
+    const host = endpoint.host;
     // 如果端口为0或未定义，传undefined给mineflayer，让其处理默认值(25565)和SRV解析
-    const port = (this.config.port && this.config.port > 0) ? this.config.port : undefined;
+    const port = endpoint.port;
+    this.config.host = host;
+    this.config.port = port || 0;
 
     if (!host) {
       this.log('error', '未配置服务器地址，请在设置中配置 host', '❌');
@@ -669,11 +714,34 @@ export class BotInstance {
 
     // Handle Proxy
     let agent = null;
+    let connect = null;
     if (this.config.proxyNodeId) {
       const localPort = proxyService.getLocalPort(this.config.proxyNodeId);
       if (localPort) {
         this.log('info', `使用代理节点: ${this.config.proxyNodeId} (桥接端口: ${localPort})`, '🌐');
         agent = new SocksProxyAgent(`socks5://127.0.0.1:${localPort}`);
+        connect = (client) => {
+          SocksClient.createConnection({
+            proxy: {
+              host: '127.0.0.1',
+              port: localPort,
+              type: 5
+            },
+            command: 'connect',
+            destination: {
+              host,
+              port: port || 25565
+            },
+            timeout: 15000
+          }, (err, info) => {
+            if (err) {
+              client.emit('error', err);
+              return;
+            }
+            client.setSocket(info.socket);
+            client.emit('connect');
+          });
+        };
       }
     }
 
@@ -681,6 +749,27 @@ export class BotInstance {
     this.log('info', `正在连接 ${host}:${port} (用户: ${username})...`, '⚡');
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const finishConnect = (error = null) => {
+        if (settled) return false;
+        settled = true;
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+          this.connectionTimeout = null;
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+        return true;
+      };
+      const failConnect = (reason) => {
+        const reasonText = this.normalizeReason(reason);
+        finishConnect(reason instanceof Error ? reason : new Error(reasonText));
+        this.attemptRepair(reasonText);
+      };
+
       try {
         const botOptions = {
           host,
@@ -690,6 +779,7 @@ export class BotInstance {
           auth: 'offline',
           connectTimeout: 15000,
           checkTimeoutInterval: 30000,
+          connect: connect || undefined,
           agent: agent || undefined
         };
 
@@ -698,8 +788,7 @@ export class BotInstance {
         this.connectionTimeout = setTimeout(() => {
           if (this.bot && !this.status.connected) {
             this.log('error', '连接超时', '❌');
-            reject(new Error('Connection timeout'));
-            this.attemptRepair('连接超时');
+            failConnect('连接超时');
           }
         }, 15000); // 15秒超时
 
@@ -707,9 +796,11 @@ export class BotInstance {
 
         this.bot.on('login', () => {
           this.log('success', `登录成功 (${username})`, '✅');
-          clearTimeout(this.connectionTimeout);
-          this.isRepairing = false;
-          this.reconnectAttempts = 0;
+          if (this.connectionTimeout) {
+            clearTimeout(this.connectionTimeout);
+            this.connectionTimeout = null;
+          }
+          this.clearReconnectState();
           this.usernameRetryCount = 0;
           this.updateActivity();
           this.startActivityMonitor();
@@ -778,7 +869,7 @@ export class BotInstance {
           }
 
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
-          resolve();
+          finishConnect();
         });
 
         this.bot.on('health', () => {
@@ -871,7 +962,7 @@ export class BotInstance {
         this.bot.on('error', (err) => {
           this.log('error', `错误: ${err.message}`, '✗');
           // 使用防重复重连
-          this.attemptRepair(err.message);
+          failConnect(err);
         });
 
         this.bot.on('kicked', (reason) => {
@@ -885,7 +976,7 @@ export class BotInstance {
           this.status.connected = false;
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
           // 被踢出后重连
-          this.attemptRepair(reasonText);
+          failConnect(reasonText);
         });
 
         this.bot.on('end', () => {
@@ -895,22 +986,21 @@ export class BotInstance {
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
           // 连接断开自动重连，除非是主动断开
           if (!this.destroyed) {
-            this.attemptRepair('连接断开');
+            failConnect('连接断开');
           }
         });
 
       } catch (error) {
         this.log('error', `连接失败: ${error.message}`, '✗');
         // 连接失败使用防重复重连
-        this.attemptRepair(error.message);
-        reject(error);
+        failConnect(error);
       }
     });
   }
 
   disconnect() {
     this.destroyed = true;
-    this.isRepairing = false;
+    this.clearReconnectState({ keepLast: false });
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;

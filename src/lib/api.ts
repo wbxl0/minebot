@@ -89,6 +89,12 @@ export interface BotStatus {
   tcpLatency?: number | null;
   proxyNodeId?: string;
   autoReconnect?: boolean;
+  reconnecting?: boolean;
+  reconnectAttempts?: number;
+  lastReconnectReason?: string;
+  lastReconnectError?: string;
+  nextReconnectAt?: string | null;
+  lastReconnectAt?: string | null;
   agentId?: string | null;
   agentToken?: string | null;
   agentStatus?: { connected: boolean; lastSeen: number | null } | null;

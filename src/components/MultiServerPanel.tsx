@@ -58,6 +58,18 @@ import { CSS } from "@dnd-kit/utilities";
 // 使用从 api.ts 导入的 BotStatus 作为 ServerConfig 的别名，保持代码可读性
 type ServerConfig = BotStatus;
 
+function formatReconnectHint(server: ServerConfig) {
+  if (!server.reconnecting) return "";
+  if (server.nextReconnectAt) {
+    const next = new Date(server.nextReconnectAt);
+    if (!Number.isNaN(next.getTime())) {
+      const seconds = Math.max(0, Math.ceil((next.getTime() - Date.now()) / 1000));
+      return `下次重连 ${seconds}s`;
+    }
+  }
+  return server.lastReconnectError || server.lastReconnectReason || "";
+}
+
 // 可排序服务器卡片组件
 function SortableServerCard({
   server,
@@ -95,6 +107,7 @@ function SortableServerCard({
   const isPanel = server.type === "panel";
   const agentOnline = server.agentStatus?.connected;
   const botUsername = server.configuredUsername || server.runtimeUsername || server.username || "";
+  const reconnectHint = formatReconnectHint(server);
 
   return (
     <div
@@ -119,7 +132,7 @@ function SortableServerCard({
         <div className="flex items-center gap-2">
           <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(server)}`} />
           <Badge
-            variant={server.connected || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
+            variant={server.connected || server.reconnecting || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
             className="text-xs"
           >
             {getStatusText(server)}
@@ -141,6 +154,11 @@ function SortableServerCard({
         {!isPanel && botUsername && (
           <p className="text-xs text-muted-foreground font-mono truncate">
             {botUsername}
+          </p>
+        )}
+        {!isPanel && reconnectHint && (
+          <p className="mt-1 text-[11px] text-amber-500 truncate">
+            {reconnectHint}
           </p>
         )}
       </div>
@@ -168,7 +186,9 @@ function SortableServerCard({
             </>
           ) : (
             <>
-              {!isPanel && !server.tcpLatency ? (
+              {!isPanel && server.reconnecting ? (
+                <span className="text-amber-500 col-span-2 truncate">第 {server.reconnectAttempts || 1} 次重连</span>
+              ) : !isPanel && !server.tcpLatency ? (
                 <span className="opacity-50 col-span-2">运行中</span>
               ) : (
                 <>
@@ -456,6 +476,7 @@ export function MultiServerPanel() {
   // 获取服务器状态颜色
   const getStatusColor = (server: ServerConfig) => {
     if (server.connected) return "bg-green-500";
+    if (server.reconnecting) return "bg-amber-500 animate-pulse";
     if (server.agentStatus?.connected) return "bg-green-500";
     if (server.type === "panel" && server.tcpOnline) return "bg-green-500";
     if (server.type === "panel" && server.panelServerState === "running") return "bg-yellow-500";
@@ -465,6 +486,7 @@ export function MultiServerPanel() {
   // 获取服务器状态文字
   const getStatusText = (server: ServerConfig) => {
     if (server.connected) return "在线";
+    if (server.reconnecting) return `重连中${server.reconnectAttempts ? ` ${server.reconnectAttempts}` : ""}`;
     if (server.agentStatus?.connected) return "在线";
     if (server.type === "panel" && server.tcpOnline) return "TCP在线";
     if (server.type === "panel" && server.panelServerState === "running") return "运行中";

@@ -241,6 +241,12 @@ export class BotPool {
           username: status.username,
           configuredUsername: status.configuredUsername || '',
           runtimeUsername: status.runtimeUsername || '',
+          reconnecting: !!status.reconnecting,
+          reconnectAttempts: status.reconnectAttempts || 0,
+          lastReconnectReason: status.lastReconnectReason || '',
+          lastReconnectError: status.lastReconnectError || '',
+          nextReconnectAt: status.nextReconnectAt || null,
+          lastReconnectAt: status.lastReconnectAt || null,
           players: status.players || [],
           // 面板服务器状态
           panelServerState: status.panelServerState || null,
