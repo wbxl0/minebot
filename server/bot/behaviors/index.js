@@ -827,6 +827,7 @@ export class AutoEatBehavior {
 
   async tick() {
     if (!this.active || !this.bot || this.eating) return;
+    if (this.bot.entity?.isInWater) return;
     const health = typeof this.bot.health === 'number' ? this.bot.health : 20;
     const food = typeof this.bot.food === 'number' ? this.bot.food : 20;
     if (health > this.minHealth && food > this.minFood) return;

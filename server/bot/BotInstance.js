@@ -9,6 +9,19 @@ import { proxyService } from '../services/ProxyService.js';
 
 // 协议数据缓存，内存紧张时清空
 const mcDataCache = new Map();
+const WATER_RESCUE_INTERVAL_MS = 500;
+const WATER_RESCUE_LOG_INTERVAL_MS = 10000;
+const WATER_ESCAPE_GOAL_INTERVAL_MS = 2500;
+const WATER_BLOCK_NAMES = new Set(['water', 'bubble_column']);
+const DANGEROUS_WATER_RESCUE_BLOCKS = new Set([
+  'lava',
+  'fire',
+  'soul_fire',
+  'magma_block',
+  'cactus',
+  'campfire',
+  'soul_campfire'
+]);
 
 /**
  * Single bot instance for one server connection
@@ -29,9 +42,13 @@ export class BotInstance {
     this.connectionTimeout = null;
     this.reconnectTimeout = null;
     this.activityMonitorInterval = null;
+    this.waterRescueInterval = null;
     this.autoChatInterval = null;
     this.restartCommandTimer = null; // 定时发送 /restart 命令
     this.lastActivity = Date.now();
+    this.lastWaterRescueLogAt = 0;
+    this.lastWaterEscapeGoalAt = 0;
+    this.waterRescueActive = false;
     this.destroyed = false;
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
@@ -361,6 +378,11 @@ export class BotInstance {
       clearInterval(this.activityMonitorInterval);
       this.activityMonitorInterval = null;
     }
+    if (this.waterRescueInterval) {
+      clearInterval(this.waterRescueInterval);
+      this.waterRescueInterval = null;
+    }
+    this.stopWaterRescueControls();
     if (this.autoChatInterval) {
       clearInterval(this.autoChatInterval);
       this.autoChatInterval = null;
@@ -421,6 +443,128 @@ export class BotInstance {
         this.attemptRepair('无响应');
       }
     }, 30000); // 每30秒检查一次
+  }
+
+  /**
+   * 防溺水自救：掉进水里时暂停原移动，尝试找岸边并持续上浮。
+   */
+  startWaterRescueMonitor() {
+    if (this.waterRescueInterval) {
+      clearInterval(this.waterRescueInterval);
+    }
+
+    this.waterRescueInterval = setInterval(() => this.tickWaterRescue(), WATER_RESCUE_INTERVAL_MS);
+    if (typeof this.waterRescueInterval.unref === 'function') {
+      this.waterRescueInterval.unref();
+    }
+  }
+
+  isWaterBlock(block) {
+    return !!block && WATER_BLOCK_NAMES.has(block.name);
+  }
+
+  isUnsafeWaterEscapeBlock(block) {
+    if (!block) return true;
+    return DANGEROUS_WATER_RESCUE_BLOCKS.has(block.name);
+  }
+
+  isBotInWater() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return false;
+    if (this.bot.entity.isInWater) return true;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    return this.isWaterBlock(feet) || this.isWaterBlock(head);
+  }
+
+  stopWaterRescueControls() {
+    const wasActive = this.waterRescueActive;
+    this.waterRescueActive = false;
+    if (wasActive && this.bot?.pathfinder) {
+      this.bot.pathfinder.stop();
+    }
+    if (!this.bot?.setControlState) return;
+    this.bot.setControlState('forward', false);
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
+    this.bot.setControlState('jump', false);
+    this.bot.setControlState('sprint', false);
+  }
+
+  findWaterEscapeGoal() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
+    const origin = this.bot.entity.position.floored();
+
+    for (let radius = 1; radius <= 5; radius++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          for (let dy = 2; dy >= -2; dy--) {
+            const feetPos = origin.offset(dx, dy, dz);
+            const feet = this.bot.blockAt(feetPos);
+            const head = this.bot.blockAt(feetPos.offset(0, 1, 0));
+            const below = this.bot.blockAt(feetPos.offset(0, -1, 0));
+
+            if (!feet || !head || !below) continue;
+            if (this.isWaterBlock(feet) || this.isWaterBlock(head) || this.isWaterBlock(below)) continue;
+            if (this.isUnsafeWaterEscapeBlock(feet) || this.isUnsafeWaterEscapeBlock(head) || this.isUnsafeWaterEscapeBlock(below)) continue;
+            if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') continue;
+            if (below.boundingBox === 'empty') continue;
+
+            return new goals.GoalNear(feetPos.x, feetPos.y, feetPos.z, 1);
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  tickWaterRescue() {
+    if (!this.bot || !this.status.connected || !this.bot.entity) return;
+    if (this.behaviorSettings?.pathSafety?.avoidWater === false) {
+      if (this.waterRescueActive) this.stopWaterRescueControls();
+      return;
+    }
+
+    if (!this.isBotInWater()) {
+      if (this.waterRescueActive) this.stopWaterRescueControls();
+      return;
+    }
+
+    const now = Date.now();
+    this.updateActivity();
+
+    if (!this.waterRescueActive) {
+      this.waterRescueActive = true;
+      this.lastWaterEscapeGoalAt = 0;
+    }
+
+    if (now - this.lastWaterRescueLogAt > WATER_RESCUE_LOG_INTERVAL_MS) {
+      this.lastWaterRescueLogAt = now;
+      this.log('warning', '检测到机器人在水中，执行防溺水自救', '🌊');
+    }
+
+    if (this.bot.pathfinder && now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS) {
+      const goal = this.findWaterEscapeGoal();
+      if (goal) {
+        this.lastWaterEscapeGoalAt = now;
+        this.bot.pathfinder.setGoal(goal, true);
+      } else {
+        this.bot.pathfinder.stop();
+      }
+    }
+
+    if (this.bot.setControlState) {
+      this.bot.setControlState('forward', false);
+      this.bot.setControlState('back', false);
+      this.bot.setControlState('left', false);
+      this.bot.setControlState('right', false);
+      this.bot.setControlState('sneak', false);
+      this.bot.setControlState('sprint', false);
+      this.bot.setControlState('jump', true);
+    }
   }
 
   /**
@@ -579,6 +723,7 @@ export class BotInstance {
           this.usernameRetryCount = 0;
           this.updateActivity();
           this.startActivityMonitor();
+          this.startWaterRescueMonitor();
 
           if (this.modes.autoChat) {
             this.startAutoChat();
