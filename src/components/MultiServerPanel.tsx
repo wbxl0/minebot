@@ -56,6 +56,62 @@ import { CSS } from "@dnd-kit/utilities";
 // 使用从 api.ts 导入的 BotStatus 作为 ServerConfig 的别名，保持代码可读性
 type ServerConfig = BotStatus;
 
+const USERNAME_PREFIXES = [
+  "Amber",
+  "Pixel",
+  "Quartz",
+  "Nova",
+  "Cobalt",
+  "Azure",
+  "Lime",
+  "Iron",
+  "Copper",
+  "Slate",
+  "Swift",
+  "Bright",
+  "Lucky",
+  "Silent",
+  "North",
+  "Solar",
+  "Lunar",
+  "Echo",
+  "Frost",
+  "Flint",
+];
+
+const USERNAME_SUFFIXES = [
+  "Worker",
+  "Builder",
+  "Miner",
+  "Keeper",
+  "Runner",
+  "Scout",
+  "Pilot",
+  "Crafter",
+  "Guard",
+  "Maker",
+  "Walker",
+  "Forge",
+  "Path",
+  "Drift",
+  "Stone",
+  "Spark",
+  "Quest",
+  "Craft",
+];
+
+function normalizeMinecraftUsername(name: string) {
+  return name.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 16);
+}
+
+function generateMinecraftUsername() {
+  const prefix = USERNAME_PREFIXES[Math.floor(Math.random() * USERNAME_PREFIXES.length)];
+  const suffix = USERNAME_SUFFIXES[Math.floor(Math.random() * USERNAME_SUFFIXES.length)];
+  const digits = Math.random() < 0.35 ? String(Math.floor(Math.random() * 90) + 10) : "";
+  const name = normalizeMinecraftUsername(`${prefix}${suffix}${digits}`);
+  return name.length >= 3 ? name : `Bot${Math.floor(Math.random() * 9000) + 1000}`;
+}
+
 // 可排序服务器卡片组件
 function SortableServerCard({
   server,
@@ -235,6 +291,11 @@ export function MultiServerPanel() {
     port: "25565",
     username: "",
   });
+
+  const handleRandomUsername = useCallback(() => {
+    setNewServer(prev => ({ ...prev, username: generateMinecraftUsername() }));
+  }, []);
+
   const [selectedServer, setSelectedServer] = useState<ServerConfig | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const { toast } = useToast();
@@ -576,11 +637,24 @@ export function MultiServerPanel() {
                             </div>
                             <div className="space-y-1">
                               <Label>用户名 (留空随机)</Label>
-                              <Input
-                                placeholder="自动生成"
-                                value={newServer.username}
-                                onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
-                              />
+                              <div className="flex gap-2">
+                                <Input
+                                  placeholder="自动生成"
+                                  value={newServer.username}
+                                  onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={handleRandomUsername}
+                                  title="随机用户名"
+                                  aria-label="随机用户名"
+                                  className="shrink-0"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                           <div className="grid grid-cols-3 gap-3">
