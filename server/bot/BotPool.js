@@ -390,23 +390,19 @@ export class BotPool {
   /**
    * Set mode for specific bot or all bots
    */
-  async setMode(mode, enabled, botId = null) {
+  setMode(mode, enabled, botId = null) {
     if (botId) {
       const bot = this.bots.get(botId);
       if (bot) {
-        const result = await bot.setMode(mode, enabled);
-        return { modes: this.getModes(), result };
+        bot.setMode(mode, enabled);
       }
     } else {
       // Apply to all bots
-      const updates = [];
       for (const bot of this.bots.values()) {
-        updates.push(bot.setMode(mode, enabled));
+        bot.setMode(mode, enabled);
       }
-      const results = await Promise.all(updates);
-      return { modes: this.getModes(), results };
     }
-    return { modes: this.getModes(), result: { success: false, message: `Bot ${botId} not found` } };
+    return this.getModes();
   }
 
   /**
