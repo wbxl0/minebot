@@ -27,6 +27,10 @@ const EMERGENCY_RESCUE_COOLDOWN_MS = 8000;
 const SURVIVAL_CHECK_INTERVAL_MS = 1000;
 const SURVIVAL_TICK_INTERVAL_MS = 1500;
 const ENVIRONMENT_RESCUE_COOLDOWN_MS = 2500;
+const SPAM_KICK_RECONNECT_DELAY_MS = 30000;
+const SPAM_KICK_GRACE_MS = 60000;
+const SURVIVAL_CHAT_FALLBACK_COOLDOWN_MS = 2000;
+const SURVIVAL_COMMAND_SKIP_LOG_INTERVAL_MS = 30000;
 const DANGEROUS_BLOCK_NAMES = new Set([
   'lava',
   'fire',
@@ -88,6 +92,10 @@ export class BotInstance {
     this.lastEnvironmentRescueAt = 0;
     this.lastEnvironmentDangerLogAt = 0;
     this.lastManualEscapeAt = 0;
+    this.lastSpamKickAt = 0;
+    this.lastSurvivalChatFallbackAt = 0;
+    this.lastSurvivalCommandSkipLogAt = 0;
+    this.survivalChatFallbackBlockedUntil = 0;
     this.survivalRescueActive = false;
     this.invincibleCreativeFallbackActive = false;
 
@@ -394,6 +402,21 @@ export class BotInstance {
     return true;
   }
 
+  normalizeReason(reason) {
+    if (!reason) return '未知原因';
+    if (reason instanceof Error) return reason.message || '未知错误';
+    if (typeof reason === 'string') return reason;
+    try {
+      return JSON.stringify(reason);
+    } catch (e) {
+      return String(reason);
+    }
+  }
+
+  isSpamKickReason(reason) {
+    return /disconnect\.spam|spam|刷屏/i.test(this.normalizeReason(reason));
+  }
+
   getStatus() {
     const configuredUsername = this.config.username || '';
     const runtimeUsername = this.status.connected ? (this.status.username || '') : '';
@@ -537,12 +560,15 @@ export class BotInstance {
       return;
     }
 
+    const reasonText = this.normalizeReason(reason);
+    const spamRelated = this.isSpamKickReason(reasonText) || Date.now() - this.lastSpamKickAt < SPAM_KICK_GRACE_MS;
+
     this.isRepairing = true;
     this.status.connected = false;
     this.reconnectAttempts++;
 
     if (!this.nextUsername) {
-      const prepared = this.prepareNextUsername(reason);
+      const prepared = this.prepareNextUsername(reasonText);
       if (prepared) {
         this.log('warning', `用户名冲突，尝试更换为 ${this.nextUsername} 重连`, '🔁');
       }
@@ -554,9 +580,12 @@ export class BotInstance {
     if (this.reconnectAttempts > 1) {
       delaySeconds = Math.min(5 * Math.pow(2, Math.min(this.reconnectAttempts - 1, 5)), 60);
     }
+    if (spamRelated) {
+      delaySeconds = Math.max(delaySeconds, SPAM_KICK_RECONNECT_DELAY_MS / 1000);
+    }
     const backoff = delaySeconds * 1000;
 
-    this.log('warning', `连接异常 (${reason})，${delaySeconds}秒后重连 (第${this.reconnectAttempts}次)...`, '🔄');
+    this.log('warning', `连接异常 (${reasonText})，${delaySeconds}秒后重连 (第${this.reconnectAttempts}次)...`, '🔄');
 
     // 彻底清理旧连接
     this.cleanup();
@@ -848,6 +877,11 @@ export class BotInstance {
         this.bot.on('kicked', (reason) => {
           const reasonText = typeof reason === 'string' ? reason : JSON.stringify(reason);
           this.log('error', `被踢出: ${reasonText}`, '👢');
+          if (this.isSpamKickReason(reasonText)) {
+            this.lastSpamKickAt = Date.now();
+            this.survivalChatFallbackBlockedUntil = Date.now() + SPAM_KICK_GRACE_MS;
+            this.log('warning', '服务器判定刷屏，已暂停聊天命令兜底并延长重连等待', '🛡️');
+          }
           this.status.connected = false;
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
           // 被踢出后重连
@@ -1353,20 +1387,61 @@ export class BotInstance {
   }
 
   /**
-   * 发送需要权限的保命命令。优先控制台/RCON，最后才让机器人聊天发命令。
+   * 发送需要权限的保命命令。自动保命默认只走面板/RCON，避免聊天刷屏被踢。
    */
-  async sendSurvivalCommand(command, fallbackChatCommand = `/${command}`) {
+  logSurvivalCommandSkip(reason = '') {
+    const now = Date.now();
+    if (now - this.lastSurvivalCommandSkipLogAt < SURVIVAL_COMMAND_SKIP_LOG_INTERVAL_MS) return;
+    this.lastSurvivalCommandSkipLogAt = now;
+    this.log(
+      'warning',
+      `保命命令未通过面板/RCON发送，已跳过聊天兜底以避免刷屏踢出${reason ? `: ${reason}` : ''}`,
+      '🛡️'
+    );
+  }
+
+  async sendSurvivalCommand(command, options = {}) {
+    const fallbackChatCommand = typeof options === 'string'
+      ? options
+      : (options.fallbackChatCommand ?? `/${command}`);
+    const allowChatFallback = typeof options === 'object' && options.allowChatFallback === true;
     const privileged = await this.sendPanelCommand(command);
     if (privileged.success) {
       return { ...privileged, channel: privileged.message?.startsWith('RCON') ? 'rcon' : 'privileged' };
     }
 
+    if (!allowChatFallback || !fallbackChatCommand) {
+      this.logSurvivalCommandSkip(privileged.message);
+      return {
+        ...privileged,
+        channel: 'privileged-failed',
+        message: `${privileged.message || '面板/RCON不可用'}；已跳过聊天兜底以避免刷屏踢出`
+      };
+    }
+
+    if (Date.now() < this.survivalChatFallbackBlockedUntil) {
+      return {
+        success: false,
+        channel: 'chat-blocked',
+        message: '近期被服务器判定刷屏，暂不通过聊天发送保命命令'
+      };
+    }
+
+    const now = Date.now();
+    if (now - this.lastSurvivalChatFallbackAt < SURVIVAL_CHAT_FALLBACK_COOLDOWN_MS) {
+      return {
+        success: false,
+        channel: 'chat-rate-limited',
+        message: '聊天命令兜底限速中'
+      };
+    }
+    this.lastSurvivalChatFallbackAt = now;
+
     if (this.bot && fallbackChatCommand) {
-      const sendChat = this.bot.chatImmediate || this.bot._minebotOriginalChat || this.bot.chat;
-      sendChat.call(this.bot, fallbackChatCommand);
+      this.bot.chat(fallbackChatCommand);
       return {
         success: true,
-        channel: sendChat === this.bot.chat ? 'chat' : 'chat-immediate',
+        channel: 'chat',
         message: `已通过聊天发送: ${fallbackChatCommand}`
       };
     }
