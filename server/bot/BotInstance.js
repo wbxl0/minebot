@@ -35,6 +35,7 @@ const SPAM_KICK_RECONNECT_DELAY_MS = 30000;
 const SPAM_KICK_GRACE_MS = 60000;
 const SURVIVAL_CHAT_FALLBACK_COOLDOWN_MS = 2000;
 const SURVIVAL_COMMAND_SKIP_LOG_INTERVAL_MS = 30000;
+const CONFIG_SAVE_LOG_INTERVAL_MS = 5000;
 const DANGEROUS_BLOCK_NAMES = new Set([
   'lava',
   'fire',
@@ -106,6 +107,7 @@ export class BotInstance {
     this.lastSpamKickAt = 0;
     this.lastSurvivalChatFallbackAt = 0;
     this.lastSurvivalCommandSkipLogAt = 0;
+    this.lastConfigSaveLogAt = 0;
     this.survivalChatFallbackBlockedUntil = 0;
     this.survivalRescueActive = false;
     this.invincibleCreativeFallbackActive = false;
@@ -1047,7 +1049,7 @@ export class BotInstance {
   /**
    * 保存配置到 ConfigManager
    */
-  saveConfig() {
+  saveConfig(options = {}) {
     if (!this.configManager) return;
 
     try {
@@ -1072,7 +1074,11 @@ export class BotInstance {
       };
       this.config = { ...this.config, ...nextConfig };
       this.configManager.updateServer(this.id, nextConfig);
-      this.log('info', '配置已保存', '💾');
+      const now = Date.now();
+      if (!options.silent && now - this.lastConfigSaveLogAt >= CONFIG_SAVE_LOG_INTERVAL_MS) {
+        this.lastConfigSaveLogAt = now;
+        this.log('info', '配置已保存', '💾');
+      }
     } catch (error) {
       this.log('warning', `保存配置失败: ${error.message}`, '⚠');
     }
@@ -1093,7 +1099,7 @@ export class BotInstance {
         }
         this.config.modes = { ...this.modes };
         this.log('warning', `保命优先，已暂缓恢复移动行为: ${restoreSafety.message || '当前不安全'}`, '🛡️');
-        this.saveConfig();
+        this.saveConfig({ silent: true });
       }
 
       try {
@@ -1213,9 +1219,16 @@ export class BotInstance {
       }
 
       if (this.modes.invincible) {
-        this.applyInvincibleMode({ reason: 'restore' }).catch(e => {
-          this.log('warning', `无敌模式恢复失败: ${e.message}`, '⚠️');
-        });
+        if (!this.hasPrivilegedSurvivalCommandChannel()) {
+          this.modes.invincible = false;
+          this.config.modes = { ...this.modes };
+          this.log('warning', '未配置面板命令或 RCON，已跳过恢复权限型无敌；自动保命继续使用自动吃和脱险', '🛡️');
+          this.saveConfig({ silent: true });
+        } else {
+          this.applyInvincibleMode({ reason: 'restore' }).catch(e => {
+            this.log('warning', `无敌模式恢复失败: ${e.message}`, '⚠️');
+          });
+        }
       }
 
       try {
@@ -1280,6 +1293,8 @@ export class BotInstance {
         if (enabled) {
           const result = await this.applyInvincibleMode();
           if (!result.success) {
+            this.modes.invincible = false;
+            this.config.modes = { ...this.modes };
             this.log('warning', `无敌模式开启失败: ${result.message || '未知错误'}`, '⚠️');
           }
         } else {
@@ -1490,11 +1505,29 @@ export class BotInstance {
     );
   }
 
+  hasPrivilegedSurvivalCommandChannel() {
+    const panel = this.status.pterodactyl;
+    const hasPanel = !!(panel && panel.url && panel.apiKey && panel.serverId);
+    const rcon = this.status.rcon;
+    const hasRcon = !!(rcon && rcon.enabled && rcon.host && rcon.port && rcon.password);
+    return hasPanel || hasRcon;
+  }
+
   async sendSurvivalCommand(command, options = {}) {
     const fallbackChatCommand = typeof options === 'string'
       ? options
       : (options.fallbackChatCommand ?? `/${command}`);
     const allowChatFallback = typeof options === 'object' && options.allowChatFallback === true;
+
+    if (!this.hasPrivilegedSurvivalCommandChannel() && (!allowChatFallback || !fallbackChatCommand)) {
+      this.logSurvivalCommandSkip('未配置面板命令或 RCON');
+      return {
+        success: false,
+        channel: 'privileged-unavailable',
+        message: '未配置面板命令或 RCON；已跳过聊天兜底以避免刷屏踢出'
+      };
+    }
+
     const privileged = await this.sendPanelCommand(command);
     if (privileged.success) {
       return { ...privileged, channel: privileged.message?.startsWith('RCON') ? 'rcon' : 'privileged' };
@@ -1539,9 +1572,9 @@ export class BotInstance {
     return privileged;
   }
 
-  async sendEffectCommand(command, label) {
-    const result = await this.sendSurvivalCommand(command);
-    if (!result.success) {
+  async sendEffectCommand(command, label, options = {}) {
+    const result = await this.sendSurvivalCommand(command, options);
+    if (!result.success && !options.silentFailure) {
       this.log('warning', `${label}失败: ${result.message || '未知错误'}`, '⚠');
     }
     return result;
@@ -1555,16 +1588,54 @@ export class BotInstance {
     }));
   }
 
-  async applyInvincibleEffects(durationSeconds = INVINCIBLE_EFFECT_DURATION_SECONDS) {
+  async applyInvincibleEffects(durationSeconds = INVINCIBLE_EFFECT_DURATION_SECONDS, options = {}) {
     const commands = this.getInvincibleEffectCommands(durationSeconds);
+    if (!this.hasPrivilegedSurvivalCommandChannel() && options.allowChatFallback !== true) {
+      if (options.logSkip !== false) {
+        this.logSurvivalCommandSkip('未配置面板命令或 RCON');
+      }
+      return commands.map(item => ({
+        success: false,
+        skipped: true,
+        channel: 'privileged-unavailable',
+        effect: item.effect,
+        message: '未配置面板命令或 RCON'
+      }));
+    }
+
     const results = [];
 
     for (const item of commands) {
-      const result = await this.sendEffectCommand(item.command, `保命效果 ${item.effect}`);
+      const result = await this.sendEffectCommand(item.command, `保命效果 ${item.effect}`, options);
       results.push(result);
     }
 
     return results;
+  }
+
+  applyPrivilegedRescueEffects(label, health, fallbackReason) {
+    if (!this.hasPrivilegedSurvivalCommandChannel()) return;
+
+    this.applyInvincibleEffects(EMERGENCY_EFFECT_DURATION_SECONDS, {
+      silentFailure: true,
+      logSkip: false
+    })
+      .then(results => {
+        const okCount = results.filter(result => result.success).length;
+        if (okCount > 0) {
+          this.log('success', `${label}保命效果已补发 (${okCount}/${results.length})`, '🛡️');
+          return;
+        }
+        if (health <= CRITICAL_HEALTH_THRESHOLD) {
+          return this.enableCreativeFallback(fallbackReason);
+        }
+      })
+      .catch(error => {
+        this.log('warning', `${label}保命增强失败: ${error.message}`, '⚠');
+        if (health <= CRITICAL_HEALTH_THRESHOLD) {
+          this.enableCreativeFallback(fallbackReason).catch(() => { });
+        }
+      });
   }
 
   async clearInvincibleEffects() {
@@ -1603,6 +1674,13 @@ export class BotInstance {
    */
   async applyInvincibleMode({ reason = 'manual', allowCreativeFallback = true } = {}) {
     if (!this.bot || !this.status.username) return { success: false, message: 'Bot 未连接' };
+    if (!this.hasPrivilegedSurvivalCommandChannel()) {
+      this.logSurvivalCommandSkip('无敌模式需要配置面板命令或 RCON');
+      return {
+        success: false,
+        message: '未配置面板命令或 RCON，无法开启权限型无敌；自动保命仍会使用自动吃和脱险'
+      };
+    }
 
     const results = await this.applyInvincibleEffects();
     const okCount = results.filter(result => result.success).length;
@@ -1627,6 +1705,13 @@ export class BotInstance {
    */
   async disableInvincibleMode() {
     if (!this.bot || !this.status.username) return { success: false, message: 'Bot 未连接' };
+    if (!this.hasPrivilegedSurvivalCommandChannel()) {
+      this.invincibleCreativeFallbackActive = false;
+      return {
+        success: true,
+        message: '已关闭本地无敌状态；未配置面板命令或 RCON，跳过服务器效果清理'
+      };
+    }
 
     const results = await this.clearInvincibleEffects();
     const okCount = results.filter(result => result.success).length;
@@ -1856,27 +1941,7 @@ export class BotInstance {
       '🛡️'
     );
 
-    this.applyInvincibleEffects(EMERGENCY_EFFECT_DURATION_SECONDS)
-      .then(results => {
-        const okCount = results.filter(result => result.success).length;
-        if (okCount > 0) {
-          this.log('success', `急救保命效果已补发 (${okCount}/${results.length})`, '🛡️');
-          return;
-        }
-        return this.enableCreativeFallback('低血量急救命令失败');
-      })
-      .catch(error => {
-        this.log('warning', `急救保命效果失败: ${error.message}`, '⚠');
-        if (health <= CRITICAL_HEALTH_THRESHOLD) {
-          this.enableCreativeFallback('生命值极低').catch(() => { });
-        }
-      });
-
-    if (health <= CRITICAL_HEALTH_THRESHOLD) {
-      this.enableCreativeFallback(`生命值极低 (${health})`).catch(error => {
-        this.log('warning', `创造模式兜底失败: ${error.message}`, '⚠');
-      });
-    }
+    this.applyPrivilegedRescueEffects('急救', health, `生命值极低 (${health})`);
 
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
     return true;
@@ -1903,26 +1968,7 @@ export class BotInstance {
       );
     }
 
-    this.applyInvincibleEffects(EMERGENCY_EFFECT_DURATION_SECONDS)
-      .then(results => {
-        const okCount = results.filter(result => result.success).length;
-        if (okCount > 0) return;
-        if (health <= EMERGENCY_HEALTH_THRESHOLD) {
-          return this.enableCreativeFallback('危险环境急救命令失败');
-        }
-      })
-      .catch(error => {
-        this.log('warning', `危险环境保命效果失败: ${error.message}`, '⚠');
-        if (health <= EMERGENCY_HEALTH_THRESHOLD) {
-          this.enableCreativeFallback('危险环境且生命值偏低').catch(() => { });
-        }
-      });
-
-    if (health <= CRITICAL_HEALTH_THRESHOLD) {
-      this.enableCreativeFallback(`危险环境且生命值极低 (${health})`).catch(error => {
-        this.log('warning', `创造模式兜底失败: ${error.message}`, '⚠');
-      });
-    }
+    this.applyPrivilegedRescueEffects('危险环境', health, `危险环境且生命值极低 (${health})`);
 
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
     return true;
@@ -2969,7 +3015,7 @@ export class BotInstance {
       this.bot.chat(result.success ? '无敌模式已关闭' : `无敌模式关闭失败: ${result.message || '未知错误'}`);
     } else {
       const result = await this.applyInvincibleMode();
-      this.modes.invincible = true;
+      this.modes.invincible = result.success;
       this.bot.chat(result.success ? '无敌模式已开启' : `无敌模式开启失败: ${result.message || '未知错误'}`);
     }
     this.saveConfig();
