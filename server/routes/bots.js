@@ -209,14 +209,14 @@ export function registerBotRoutes(app, {
   });
 
   // ===== Behavior Control APIs =====
-  app.post('/api/bots/:id/behavior', (req, res) => {
+  app.post('/api/bots/:id/behavior', async (req, res) => {
     try {
       const { behavior, enabled, options } = req.body;
       const bot = botManager.bots.get(req.params.id);
       if (!bot) {
         return res.status(404).json({ success: false, error: 'Bot not found' });
       }
-      const result = bot.setBehavior(behavior, enabled, options || {});
+      const result = await bot.setBehavior(behavior, enabled, options || {});
       res.json({ success: result.success, message: result.message, status: bot.getStatus() });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
@@ -338,15 +338,20 @@ export function registerBotRoutes(app, {
     }
   });
 
-  app.post('/api/bots/:id/mode', (req, res) => {
+  app.post('/api/bots/:id/mode', async (req, res) => {
     try {
       const bot = botManager.bots.get(req.params.id);
       if (!bot) {
         return res.status(404).json({ success: false, error: 'Bot not found' });
       }
       const { mode, enabled } = req.body;
-      bot.setMode(mode, enabled);
-      res.json({ success: true, modes: bot.modes, status: bot.getStatus() });
+      const result = await bot.setMode(mode, enabled);
+      res.json({
+        success: result?.success !== false,
+        message: result?.message,
+        modes: bot.modes,
+        status: bot.getStatus()
+      });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
     }
@@ -483,7 +488,7 @@ export function registerBotRoutes(app, {
     }
   });
 
-  app.post('/api/bots/:id/auto-chat', (req, res) => {
+  app.post('/api/bots/:id/auto-chat', async (req, res) => {
     try {
       const bot = botManager.bots.get(req.params.id);
       if (!bot) {
@@ -498,7 +503,7 @@ export function registerBotRoutes(app, {
       const result = bot.updateAutoChatConfig(config);
 
       if (enabled !== undefined) {
-        bot.setMode('autoChat', enabled);
+        await bot.setMode('autoChat', enabled);
       }
 
       res.json({ success: true, autoChat: result, status: bot.getStatus() });

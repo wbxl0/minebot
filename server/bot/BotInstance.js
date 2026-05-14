@@ -10,6 +10,49 @@ import { proxyService } from '../services/ProxyService.js';
 // 协议数据缓存，内存紧张时清空
 const mcDataCache = new Map();
 
+const INVINCIBLE_EFFECTS = [
+  { name: 'resistance', amplifier: 255 },
+  { name: 'regeneration', amplifier: 255 },
+  { name: 'fire_resistance', amplifier: 0 },
+  { name: 'saturation', amplifier: 10 },
+  { name: 'absorption', amplifier: 4 },
+  { name: 'slow_falling', amplifier: 0 },
+  { name: 'water_breathing', amplifier: 0 }
+];
+const INVINCIBLE_EFFECT_DURATION_SECONDS = 999999;
+const EMERGENCY_EFFECT_DURATION_SECONDS = 180;
+const EMERGENCY_HEALTH_THRESHOLD = 8;
+const CRITICAL_HEALTH_THRESHOLD = 4;
+const EMERGENCY_RESCUE_COOLDOWN_MS = 8000;
+const SURVIVAL_CHECK_INTERVAL_MS = 1000;
+const ENVIRONMENT_RESCUE_COOLDOWN_MS = 2500;
+const DANGEROUS_BLOCK_NAMES = new Set([
+  'lava',
+  'fire',
+  'soul_fire',
+  'magma_block',
+  'cactus',
+  'campfire',
+  'soul_campfire',
+  'sweet_berry_bush',
+  'powder_snow'
+]);
+const WATER_BLOCK_NAMES = new Set(['water', 'bubble_column']);
+const AIR_BLOCK_NAMES = new Set(['air', 'cave_air', 'void_air']);
+const SURVIVAL_GATED_BEHAVIORS = new Set([
+  'come',
+  'follow',
+  'attack',
+  'patrol',
+  'mining',
+  'guard',
+  'fishing',
+  'antiAfk',
+  'humanize',
+  'safeIdle',
+  'workflow'
+]);
+
 /**
  * Single bot instance for one server connection
  */
@@ -36,6 +79,14 @@ export class BotInstance {
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
     this.reconnectAttempts = 0; // 重连次数
+    this.lastEmergencyRescueAt = 0;
+    this.lastCreativeFallbackAt = 0;
+    this.lastSurvivalCheckAt = 0;
+    this.lastEnvironmentRescueAt = 0;
+    this.lastEnvironmentDangerLogAt = 0;
+    this.lastManualEscapeAt = 0;
+    this.survivalRescueActive = false;
+    this.invincibleCreativeFallbackActive = false;
 
     // 每个机器人独立的日志
     this.logs = [];
@@ -608,11 +659,15 @@ export class BotInstance {
           // 初始化行为管理器，传递日志函数以便巡逻等行为输出坐标
           const controller = {
             startMining: () => {
+              const safety = this.ensureSafeToStartBehavior('mining');
+              if (!safety.success) return safety;
               this.stopConflictingModes('mining');
               return this.behaviors?.mining?.start();
             },
             stopMining: () => this.behaviors?.mining?.stop(),
             startPatrol: () => {
+              const safety = this.ensureSafeToStartBehavior('patrol');
+              if (!safety.success) return safety;
               this.stopConflictingModes('patrol');
               const waypoints = this.behaviorSettings.patrol?.waypoints || null;
               return this.behaviors?.patrol?.start(waypoints);
@@ -646,6 +701,7 @@ export class BotInstance {
           this.status.health = this.bot.health;
           this.status.food = this.bot.food;
           this.updateActivity();
+          this.runSurvivalCheck('health');
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
         });
 
@@ -694,6 +750,7 @@ export class BotInstance {
           if (this.bot?.entity && this.status.connected) {
             this.status.position = this.bot.entity.position;
             this.updateActivity();
+            this.runSurvivalCheck('move');
           }
         });
 
@@ -850,6 +907,16 @@ export class BotInstance {
 
     // 稍微延迟一下，确保机器人完全初始化
     setTimeout(() => {
+      const restoreSafety = this.runSurvivalCheck('restore', { force: true });
+      if (!restoreSafety.safe) {
+        for (const flag of ['follow', 'autoAttack', 'patrol', 'mining', 'antiAfk', 'guard', 'fishing', 'humanize', 'safeIdle', 'workflow']) {
+          this.modes[flag] = false;
+        }
+        this.config.modes = { ...this.modes };
+        this.log('warning', `保命优先，已暂缓恢复移动行为: ${restoreSafety.message || '当前不安全'}`, '🛡️');
+        this.saveConfig();
+      }
+
       try {
         if (this.modes.aiView) {
           this.behaviors.aiView.start();
@@ -966,13 +1033,10 @@ export class BotInstance {
         this.log('warning', `任务脚本恢复失败: ${e.message}`, '⚠️');
       }
 
-      try {
-        if (this.modes.invincible) {
-          // 使用面板控制台发送创造模式命令（确保有权限）
-          this.applyInvincibleMode();
-        }
-      } catch (e) {
-        this.log('warning', `无敌模式恢复失败: ${e.message}`, '⚠️');
+      if (this.modes.invincible) {
+        this.applyInvincibleMode({ reason: 'restore' }).catch(e => {
+          this.log('warning', `无敌模式恢复失败: ${e.message}`, '⚠️');
+        });
       }
 
       try {
@@ -986,7 +1050,7 @@ export class BotInstance {
     }, 2000);
   }
 
-  setMode(mode, enabled) {
+  async setMode(mode, enabled) {
     if (mode in this.modes) {
       this.modes[mode] = enabled;
       this.config.modes = { ...this.modes };
@@ -1011,6 +1075,15 @@ export class BotInstance {
       // 巡逻模式
       if (mode === 'patrol' && this.behaviors) {
         if (enabled) {
+          const safety = this.ensureSafeToStartBehavior('patrol');
+          if (!safety.success) {
+            this.modes.patrol = false;
+            this.config.modes = { ...this.modes };
+            this.log('warning', safety.message, '🛡️');
+            this.saveConfig();
+            if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+            return safety;
+          }
           this.stopConflictingModes('patrol');
           // 使用出生点作为巡逻中心
           if (this.spawnPosition) {
@@ -1023,12 +1096,18 @@ export class BotInstance {
           this.log('info', '巡逻模式已关闭', '🚶');
         }
       }
-      // 无敌模式 - 使用创造模式实现真正无敌
+      // 无敌模式 - 优先使用保命效果包，失败时再兜底创造模式
       if (mode === 'invincible' && this.bot) {
         if (enabled) {
-          this.applyInvincibleMode();
+          const result = await this.applyInvincibleMode();
+          if (!result.success) {
+            this.log('warning', `无敌模式开启失败: ${result.message || '未知错误'}`, '⚠️');
+          }
         } else {
-          this.disableInvincibleMode();
+          const result = await this.disableInvincibleMode();
+          if (!result.success) {
+            this.log('warning', `无敌模式关闭失败: ${result.message || '未知错误'}`, '⚠️');
+          }
         }
       }
       // 保存模式设置到配置
@@ -1219,49 +1298,463 @@ export class BotInstance {
   }
 
   /**
-   * 应用无敌模式 - 优先使用面板控制台，否则使用机器人聊天
+   * 发送需要权限的保命命令。优先控制台/RCON，最后才让机器人聊天发命令。
    */
-  async applyInvincibleMode() {
-    if (!this.bot || !this.status.username) return;
-
-    const username = this.status.username;
-
-    // 优先尝试通过面板控制台发送命令（有完整权限）
-    if (this.status.pterodactyl?.url && this.status.pterodactyl?.apiKey) {
-      const result = await this.sendPanelCommand(`gamemode creative ${username}`);
-      if (result.success) {
-        this.log('success', '无敌模式已开启 (创造模式 - 通过面板)', '🛡️');
-        return;
-      }
-      this.log('warning', '面板命令失败，尝试使用机器人命令...', '⚠');
+  async sendSurvivalCommand(command, fallbackChatCommand = `/${command}`) {
+    const privileged = await this.sendPanelCommand(command);
+    if (privileged.success) {
+      return { ...privileged, channel: privileged.message?.startsWith('RCON') ? 'rcon' : 'privileged' };
     }
 
-    // 回退：通过机器人聊天发送命令
-    this.bot.chat(`/gamemode creative ${username}`);
-    this.log('info', '无敌模式命令已发送 (创造模式)', '🛡️');
+    if (this.bot && fallbackChatCommand) {
+      const sendChat = this.bot.chatImmediate || this.bot._minebotOriginalChat || this.bot.chat;
+      sendChat.call(this.bot, fallbackChatCommand);
+      return {
+        success: true,
+        channel: sendChat === this.bot.chat ? 'chat' : 'chat-immediate',
+        message: `已通过聊天发送: ${fallbackChatCommand}`
+      };
+    }
+
+    return privileged;
+  }
+
+  async sendEffectCommand(command, label) {
+    const result = await this.sendSurvivalCommand(command);
+    if (!result.success) {
+      this.log('warning', `${label}失败: ${result.message || '未知错误'}`, '⚠');
+    }
+    return result;
+  }
+
+  getInvincibleEffectCommands(durationSeconds = INVINCIBLE_EFFECT_DURATION_SECONDS) {
+    const username = this.status.username;
+    return INVINCIBLE_EFFECTS.map(effect => ({
+      effect: effect.name,
+      command: `effect give ${username} ${effect.name} ${durationSeconds} ${effect.amplifier} true`
+    }));
+  }
+
+  async applyInvincibleEffects(durationSeconds = INVINCIBLE_EFFECT_DURATION_SECONDS) {
+    const commands = this.getInvincibleEffectCommands(durationSeconds);
+    const results = [];
+
+    for (const item of commands) {
+      const result = await this.sendEffectCommand(item.command, `保命效果 ${item.effect}`);
+      results.push(result);
+    }
+
+    return results;
+  }
+
+  async clearInvincibleEffects() {
+    const username = this.status.username;
+    const results = [];
+
+    for (const effect of INVINCIBLE_EFFECTS) {
+      const result = await this.sendEffectCommand(
+        `effect clear ${username} ${effect.name}`,
+        `清除保命效果 ${effect.name}`
+      );
+      results.push(result);
+    }
+
+    return results;
+  }
+
+  async enableCreativeFallback(reason = '保命效果可能未生效') {
+    if (!this.status.username) return { success: false, message: '用户名未知' };
+    const now = Date.now();
+    if (now - this.lastCreativeFallbackAt < EMERGENCY_RESCUE_COOLDOWN_MS) {
+      return { success: false, message: '创造模式兜底冷却中' };
+    }
+    this.lastCreativeFallbackAt = now;
+
+    const result = await this.sendSurvivalCommand(`gamemode creative ${this.status.username}`);
+    if (result.success) {
+      this.invincibleCreativeFallbackActive = true;
+      this.log('warning', `已启用创造模式兜底: ${reason}`, '🛡️');
+    }
+    return result;
+  }
+
+  /**
+   * 应用无敌模式 - 保持生存玩法，使用抗性/回血/防火等效果保命。
+   */
+  async applyInvincibleMode({ reason = 'manual', allowCreativeFallback = true } = {}) {
+    if (!this.bot || !this.status.username) return { success: false, message: 'Bot 未连接' };
+
+    const results = await this.applyInvincibleEffects();
+    const okCount = results.filter(result => result.success).length;
+
+    if (okCount > 0) {
+      this.log('success', '无敌模式已开启 (抗性/回血/防火保命效果)', '🛡️');
+      return { success: true, message: `已发送 ${okCount}/${results.length} 个保命效果` };
+    }
+
+    if (allowCreativeFallback) {
+      const fallback = await this.enableCreativeFallback(`保命效果发送失败 (${reason})`);
+      if (fallback.success) {
+        return { success: true, message: '保命效果失败，已启用创造模式兜底' };
+      }
+    }
+
+    return { success: false, message: '保命效果发送失败' };
   }
 
   /**
    * 关闭无敌模式
    */
   async disableInvincibleMode() {
-    if (!this.bot || !this.status.username) return;
+    if (!this.bot || !this.status.username) return { success: false, message: 'Bot 未连接' };
 
-    const username = this.status.username;
-    const fallbackMode = 'survival';
-
-    // 优先尝试通过面板控制台发送命令
-    if (this.status.pterodactyl?.url && this.status.pterodactyl?.apiKey) {
-      const result = await this.sendPanelCommand(`gamemode ${fallbackMode} ${username}`);
+    const results = await this.clearInvincibleEffects();
+    const okCount = results.filter(result => result.success).length;
+    if (this.invincibleCreativeFallbackActive) {
+      const fallbackMode = 'survival';
+      const result = await this.sendSurvivalCommand(`gamemode ${fallbackMode} ${this.status.username}`);
       if (result.success) {
-        this.log('success', `无敌模式已关闭 (${fallbackMode} - 通过面板)`, '🛡️');
-        return;
+        this.invincibleCreativeFallbackActive = false;
+        this.log('info', `已退出创造模式兜底 (${fallbackMode})`, '🛡️');
+      }
+    }
+    this.log('info', `无敌模式已关闭，已清除 ${okCount}/${results.length} 个保命效果`, '🛡️');
+    return { success: okCount > 0, message: `已清除 ${okCount}/${results.length} 个保命效果` };
+  }
+
+  stopDangerousBehaviorsForRescue() {
+    const stopped = [];
+    const candidates = [
+      ['attack', 'autoAttack'],
+      ['guard', 'guard'],
+      ['mining', 'mining'],
+      ['patrol', 'patrol'],
+      ['follow', 'follow'],
+      ['fishing', 'fishing'],
+      ['antiAfk', 'antiAfk'],
+      ['humanize', 'humanize'],
+      ['safeIdle', 'safeIdle'],
+      ['workflow', 'workflow']
+    ];
+
+    for (const [mode, flag] of candidates) {
+      if (this.modes[flag]) {
+        this.stopMode(mode);
+        stopped.push(mode);
       }
     }
 
-    // 回退：通过机器人聊天发送命令
-    this.bot.chat(`/gamemode ${fallbackMode} ${username}`);
-    this.log('info', `无敌模式已关闭 (${fallbackMode})`, '🛡️');
+    if (this.bot?.pathfinder) {
+      this.bot.pathfinder.stop();
+      if (typeof this.bot.pathfinder.setGoal === 'function') {
+        this.bot.pathfinder.setGoal(null);
+      }
+    }
+    if (this.bot?.setControlState) {
+      this.bot.setControlState('forward', false);
+      this.bot.setControlState('back', false);
+      this.bot.setControlState('left', false);
+      this.bot.setControlState('right', false);
+      this.bot.setControlState('sprint', false);
+      this.bot.setControlState('jump', false);
+      this.bot.setControlState('sneak', false);
+    }
+
+    return stopped;
+  }
+
+  startEmergencyAutoEat() {
+    if (!this.behaviors?.autoEat || this.modes.autoEat) return;
+    const options = {
+      ...(this.behaviorSettings.autoEat || {}),
+      minHealth: Math.max(16, Number(this.behaviorSettings.autoEat?.minHealth) || 0),
+      minFood: Math.max(18, Number(this.behaviorSettings.autoEat?.minFood) || 0)
+    };
+    const result = this.behaviors.autoEat.start(options);
+    if (result.success) {
+      this.modes.autoEat = true;
+      this.log('info', '低血量急救已开启自动吃', '🍖');
+    }
+  }
+
+  getBlockAtOffset(dx = 0, dy = 0, dz = 0) {
+    if (!this.bot?.entity || typeof this.bot.blockAt !== 'function') return null;
+    try {
+      const pos = this.bot.entity.position.offset(dx, dy, dz);
+      return this.bot.blockAt(pos);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  isAirBlock(block) {
+    if (!block) return true;
+    return AIR_BLOCK_NAMES.has(block.name);
+  }
+
+  isWaterBlock(block) {
+    return !!block && WATER_BLOCK_NAMES.has(block.name);
+  }
+
+  isDangerousBlock(block) {
+    if (!block) return false;
+    if (DANGEROUS_BLOCK_NAMES.has(block.name)) return true;
+    if (this.behaviorSettings?.pathSafety?.avoidLava && block.name?.includes?.('lava')) return true;
+    return false;
+  }
+
+  getDropDepth(maxDepth = 8) {
+    if (!this.bot?.entity) return 0;
+    let depth = 0;
+    for (let y = -1; y >= -maxDepth; y -= 1) {
+      const block = this.getBlockAtOffset(0, y, 0);
+      if (!this.isAirBlock(block)) return depth;
+      depth += 1;
+    }
+    return depth;
+  }
+
+  detectEnvironmentalDanger() {
+    if (!this.bot?.entity) return { dangerous: false, reasons: [] };
+    const reasons = [];
+    const safety = this.behaviorSettings?.pathSafety || {};
+    const feet = this.getBlockAtOffset(0, 0, 0);
+    const head = this.getBlockAtOffset(0, 1, 0);
+    const below = this.getBlockAtOffset(0, -1, 0);
+
+    if (this.isDangerousBlock(feet)) reasons.push(`${feet.name} 在脚下`);
+    if (this.isDangerousBlock(head)) reasons.push(`${head.name} 在身上`);
+    if (this.isDangerousBlock(below)) reasons.push(`${below.name} 在下方`);
+    if (safety.avoidWater && (this.isWaterBlock(feet) || this.isWaterBlock(head))) {
+      reasons.push('正在水中');
+    }
+
+    if (safety.avoidEdges) {
+      const maxDropDown = Number.isFinite(safety.maxDropDown) ? safety.maxDropDown : 2;
+      const dropDepth = this.getDropDepth(Math.max(maxDropDown + 2, 5));
+      if (dropDepth > maxDropDown) {
+        reasons.push(`脚下落差 ${dropDepth}`);
+      }
+    }
+
+    const nearbyOffsets = [
+      [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+      [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1]
+    ];
+    for (const [dx, dy, dz] of nearbyOffsets) {
+      const block = this.getBlockAtOffset(dx, dy, dz);
+      if (this.isDangerousBlock(block)) {
+        reasons.push(`附近有 ${block.name}`);
+        break;
+      }
+    }
+
+    return {
+      dangerous: reasons.length > 0,
+      reasons,
+      feet: feet?.name || null,
+      head: head?.name || null,
+      below: below?.name || null
+    };
+  }
+
+  findEscapeDirection() {
+    if (!this.bot?.entity) return null;
+    const origin = this.bot.entity.position;
+    const candidates = [
+      { dx: 1, dz: 0 },
+      { dx: -1, dz: 0 },
+      { dx: 0, dz: 1 },
+      { dx: 0, dz: -1 },
+      { dx: 1, dz: 1 },
+      { dx: -1, dz: 1 },
+      { dx: 1, dz: -1 },
+      { dx: -1, dz: -1 }
+    ];
+
+    for (const candidate of candidates) {
+      const feet = this.getBlockAtOffset(candidate.dx, 0, candidate.dz);
+      const head = this.getBlockAtOffset(candidate.dx, 1, candidate.dz);
+      const below = this.getBlockAtOffset(candidate.dx, -1, candidate.dz);
+      if (this.isDangerousBlock(feet) || this.isDangerousBlock(head) || this.isDangerousBlock(below)) continue;
+      if (this.behaviorSettings?.pathSafety?.avoidWater && (this.isWaterBlock(feet) || this.isWaterBlock(head) || this.isWaterBlock(below))) continue;
+      if (this.isAirBlock(below) && (this.behaviorSettings?.pathSafety?.avoidEdges ?? true)) continue;
+      return {
+        controls: ['forward'],
+        lookAt: origin.offset(candidate.dx, 0, candidate.dz)
+      };
+    }
+
+    return null;
+  }
+
+  tryManualEscape() {
+    if (!this.bot?.setControlState) return false;
+    const now = Date.now();
+    if (now - this.lastManualEscapeAt < ENVIRONMENT_RESCUE_COOLDOWN_MS) return false;
+
+    const escape = this.findEscapeDirection();
+    const controls = escape?.controls || ['back'];
+    this.lastManualEscapeAt = now;
+
+    for (const control of ['forward', 'back', 'left', 'right', 'sprint']) {
+      this.bot.setControlState(control, false);
+    }
+    if (escape?.lookAt && typeof this.bot.lookAt === 'function') {
+      Promise.resolve(this.bot.lookAt(escape.lookAt)).catch(() => { });
+    }
+    for (const control of controls) {
+      this.bot.setControlState(control, true);
+    }
+    this.bot.setControlState('jump', true);
+
+    setTimeout(() => {
+      if (!this.bot?.setControlState) return;
+      for (const control of controls) {
+        this.bot.setControlState(control, false);
+      }
+      this.bot.setControlState('jump', false);
+    }, 450);
+
+    return true;
+  }
+
+  handleHealthSafety(health, reason = 'health') {
+    if (!this.bot || !this.status.connected) return false;
+
+    if (health > EMERGENCY_HEALTH_THRESHOLD) return false;
+
+    const now = Date.now();
+    if (now - this.lastEmergencyRescueAt < EMERGENCY_RESCUE_COOLDOWN_MS) return false;
+    this.lastEmergencyRescueAt = now;
+
+    const stopped = this.stopDangerousBehaviorsForRescue();
+    this.startEmergencyAutoEat();
+    this.log(
+      'warning',
+      `生命值过低 (${health})，执行急救${stopped.length ? `，已停止: ${stopped.join(', ')}` : ''}`,
+      '🛡️'
+    );
+
+    this.applyInvincibleEffects(EMERGENCY_EFFECT_DURATION_SECONDS)
+      .then(results => {
+        const okCount = results.filter(result => result.success).length;
+        if (okCount > 0) {
+          this.log('success', `急救保命效果已补发 (${okCount}/${results.length})`, '🛡️');
+          return;
+        }
+        return this.enableCreativeFallback('低血量急救命令失败');
+      })
+      .catch(error => {
+        this.log('warning', `急救保命效果失败: ${error.message}`, '⚠');
+        if (health <= CRITICAL_HEALTH_THRESHOLD) {
+          this.enableCreativeFallback('生命值极低').catch(() => { });
+        }
+      });
+
+    if (health <= CRITICAL_HEALTH_THRESHOLD) {
+      this.enableCreativeFallback(`生命值极低 (${health})`).catch(error => {
+        this.log('warning', `创造模式兜底失败: ${error.message}`, '⚠');
+      });
+    }
+
+    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+    return true;
+  }
+
+  handleEnvironmentDanger(environment, health, reason = 'environment') {
+    if (!environment?.dangerous || !this.bot || !this.status.connected) return false;
+
+    const now = Date.now();
+    if (now - this.lastEnvironmentRescueAt < ENVIRONMENT_RESCUE_COOLDOWN_MS) return false;
+    this.lastEnvironmentRescueAt = now;
+
+    const stopped = this.stopDangerousBehaviorsForRescue();
+    this.startEmergencyAutoEat();
+    this.tryManualEscape();
+
+    if (now - this.lastEnvironmentDangerLogAt > EMERGENCY_RESCUE_COOLDOWN_MS) {
+      this.lastEnvironmentDangerLogAt = now;
+      const detail = environment.reasons.slice(0, 3).join('、');
+      this.log(
+        'warning',
+        `检测到危险环境 (${detail || reason})，执行脱险${stopped.length ? `，已停止: ${stopped.join(', ')}` : ''}`,
+        '🛡️'
+      );
+    }
+
+    this.applyInvincibleEffects(EMERGENCY_EFFECT_DURATION_SECONDS)
+      .then(results => {
+        const okCount = results.filter(result => result.success).length;
+        if (okCount > 0) return;
+        if (health <= EMERGENCY_HEALTH_THRESHOLD) {
+          return this.enableCreativeFallback('危险环境急救命令失败');
+        }
+      })
+      .catch(error => {
+        this.log('warning', `危险环境保命效果失败: ${error.message}`, '⚠');
+        if (health <= EMERGENCY_HEALTH_THRESHOLD) {
+          this.enableCreativeFallback('危险环境且生命值偏低').catch(() => { });
+        }
+      });
+
+    if (health <= CRITICAL_HEALTH_THRESHOLD) {
+      this.enableCreativeFallback(`危险环境且生命值极低 (${health})`).catch(error => {
+        this.log('warning', `创造模式兜底失败: ${error.message}`, '⚠');
+      });
+    }
+
+    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+    return true;
+  }
+
+  runSurvivalCheck(reason = 'tick', { force = false } = {}) {
+    if (!this.bot || !this.status.connected || !this.bot.entity) return { safe: true };
+
+    const now = Date.now();
+    if (!force && now - this.lastSurvivalCheckAt < SURVIVAL_CHECK_INTERVAL_MS) {
+      return { safe: true, skipped: true };
+    }
+    if (this.survivalRescueActive) return { safe: true, skipped: true };
+    this.lastSurvivalCheckAt = now;
+
+    const health = typeof this.bot.health === 'number' ? this.bot.health : 20;
+    const environment = this.detectEnvironmentalDanger();
+    const lowHealth = health <= EMERGENCY_HEALTH_THRESHOLD;
+
+    if (!lowHealth && !environment.dangerous) {
+      return { safe: true, health, environment };
+    }
+
+    this.survivalRescueActive = true;
+    try {
+      if (lowHealth) this.handleHealthSafety(health, reason);
+      if (environment.dangerous) this.handleEnvironmentDanger(environment, health, reason);
+    } finally {
+      this.survivalRescueActive = false;
+    }
+
+    return {
+      safe: false,
+      health,
+      lowHealth,
+      environment,
+      message: lowHealth ? `生命值过低 (${health})` : environment.reasons.join('、')
+    };
+  }
+
+  ensureSafeToStartBehavior(behavior) {
+    if (!SURVIVAL_GATED_BEHAVIORS.has(behavior)) {
+      return { success: true };
+    }
+    const result = this.runSurvivalCheck(`start:${behavior}`, { force: true });
+    if (result.safe) return { success: true };
+
+    const reason = result.message || '当前环境危险';
+    return {
+      success: false,
+      message: `保命优先，暂不启动 ${behavior}: ${reason}`
+    };
   }
 
   /**
@@ -1858,6 +2351,10 @@ export class BotInstance {
         this.behaviors.fishing.stop();
         this.modes.fishing = false;
         break;
+      case 'antiAfk':
+        this.behaviors.antiAfk.stop();
+        this.modes.antiAfk = false;
+        break;
       case 'humanize':
         this.behaviors.humanize.stop();
         this.modes.humanize = false;
@@ -2120,6 +2617,12 @@ export class BotInstance {
 
   async cmdCome(username) {
     if (!this.bot) return;
+    const safety = this.ensureSafeToStartBehavior('come');
+    if (!safety.success) {
+      this.bot.chat(safety.message);
+      if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+      return;
+    }
     const player = this.bot.players[username];
     if (!player?.entity) {
       this.bot.chat('找不到你');
@@ -2140,6 +2643,12 @@ export class BotInstance {
       this.modes.follow = false;
       this.bot.chat('停止跟随');
     } else {
+      const safety = this.ensureSafeToStartBehavior('follow');
+      if (!safety.success) {
+        this.bot.chat(safety.message);
+        if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+        return;
+      }
       this.stopConflictingModes('follow');
       const result = this.behaviors.follow.start(targetName);
       if (result.success) {
@@ -2188,10 +2697,16 @@ export class BotInstance {
       this.modes.autoAttack = false;
       this.bot.chat('停止攻击');
     } else {
+      const safety = this.ensureSafeToStartBehavior('attack');
+      if (!safety.success) {
+        this.bot.chat(safety.message);
+        if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+        return;
+      }
       this.stopConflictingModes('attack');
       const mode = args[0] || 'hostile';
       const result = this.behaviors.attack.start(mode, this.behaviorSettings.attack || {});
-      this.modes.autoAttack = true;
+      this.modes.autoAttack = result.success;
       this.bot.chat(result.message);
     }
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
@@ -2205,6 +2720,12 @@ export class BotInstance {
       this.modes.patrol = false;
       this.bot.chat('停止巡逻');
     } else {
+      const safety = this.ensureSafeToStartBehavior('patrol');
+      if (!safety.success) {
+        this.bot.chat(safety.message);
+        if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+        return;
+      }
       this.stopConflictingModes('patrol');
       const waypoints = this.behaviorSettings.patrol?.waypoints || null;
       const result = this.behaviors.patrol.start(waypoints);
@@ -2219,17 +2740,17 @@ export class BotInstance {
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
   }
 
-  cmdGod() {
+  async cmdGod() {
     if (!this.bot) return;
 
     if (this.modes.invincible) {
-      this.disableInvincibleMode();
+      const result = await this.disableInvincibleMode();
       this.modes.invincible = false;
-      this.bot.chat('无敌模式已关闭');
+      this.bot.chat(result.success ? '无敌模式已关闭' : `无敌模式关闭失败: ${result.message || '未知错误'}`);
     } else {
-      this.applyInvincibleMode();
+      const result = await this.applyInvincibleMode();
       this.modes.invincible = true;
-      this.bot.chat('无敌模式已开启');
+      this.bot.chat(result.success ? '无敌模式已开启' : `无敌模式开启失败: ${result.message || '未知错误'}`);
     }
     this.saveConfig();
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
@@ -2243,9 +2764,15 @@ export class BotInstance {
       this.modes.mining = false;
       this.bot.chat('停止挖矿');
     } else {
+      const safety = this.ensureSafeToStartBehavior('mining');
+      if (!safety.success) {
+        this.bot.chat(safety.message);
+        if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+        return;
+      }
       this.stopConflictingModes('mining');
       const result = this.behaviors.mining.start();
-      this.modes.mining = true;
+      this.modes.mining = result.success;
       this.bot.chat(result.message);
     }
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
@@ -2283,6 +2810,13 @@ export class BotInstance {
     if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
 
     let result;
+    if (enabled) {
+      const safety = this.ensureSafeToStartBehavior(behavior);
+      if (!safety.success) {
+        return safety;
+      }
+    }
+
     switch (behavior) {
       case 'follow':
         if (enabled) {
@@ -2299,7 +2833,7 @@ export class BotInstance {
           this.stopConflictingModes('attack');
           const attackOptions = { ...(this.behaviorSettings.attack || {}), ...(options || {}) };
           result = this.behaviors.attack.start(options.mode || 'hostile', attackOptions);
-          this.modes.autoAttack = true;
+          this.modes.autoAttack = result.success;
         } else {
           result = this.behaviors.attack.stop();
           this.modes.autoAttack = false;
@@ -2310,7 +2844,7 @@ export class BotInstance {
           this.stopConflictingModes('patrol');
           const patrolOptions = { ...(this.behaviorSettings.patrol || {}), ...(options || {}) };
           result = this.behaviors.patrol.start(patrolOptions.waypoints);
-          this.modes.patrol = true;
+          this.modes.patrol = result.success;
         } else {
           result = this.behaviors.patrol.stop();
           this.modes.patrol = false;
@@ -2320,7 +2854,7 @@ export class BotInstance {
         if (enabled) {
           this.stopConflictingModes('mining');
           result = this.behaviors.mining.start(options.blocks, options);
-          this.modes.mining = true;
+          this.modes.mining = result.success;
         } else {
           result = this.behaviors.mining.stop();
           this.modes.mining = false;

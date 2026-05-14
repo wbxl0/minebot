@@ -1136,6 +1136,10 @@ export class RateLimitBehavior {
     this.windowCount = 0;
     this.blockedCount = 0;
     this.originalChat = null;
+    this.rateLimitedChat = null;
+    this.immediateChat = null;
+    this.previousChatImmediate = null;
+    this.previousOriginalChat = null;
   }
 
   start(options = {}) {
@@ -1153,7 +1157,10 @@ export class RateLimitBehavior {
     this.active = true;
     this.blockedCount = 0;
     this.originalChat = this.bot.chat.bind(this.bot);
-    this.bot.chat = (message) => {
+    this.previousChatImmediate = this.bot.chatImmediate;
+    this.previousOriginalChat = this.bot._minebotOriginalChat;
+    this.immediateChat = (message) => this.originalChat(message);
+    this.rateLimitedChat = (message) => {
       if (!this.active) return this.originalChat(message);
       if (this.shouldBlock()) {
         this.blockedCount += 1;
@@ -1161,6 +1168,9 @@ export class RateLimitBehavior {
       }
       return this.originalChat(message);
     };
+    this.bot.chat = this.rateLimitedChat;
+    this.bot.chatImmediate = this.immediateChat;
+    this.bot._minebotOriginalChat = this.originalChat;
     return { success: true, message: '限速已开启' };
   }
 
@@ -1189,9 +1199,29 @@ export class RateLimitBehavior {
   stop() {
     this.active = false;
     if (this.bot && this.originalChat) {
-      this.bot.chat = this.originalChat;
+      if (this.bot.chat === this.rateLimitedChat) {
+        this.bot.chat = this.originalChat;
+      }
+      if (this.bot.chatImmediate === this.immediateChat) {
+        if (this.previousChatImmediate) {
+          this.bot.chatImmediate = this.previousChatImmediate;
+        } else {
+          delete this.bot.chatImmediate;
+        }
+      }
+      if (this.bot._minebotOriginalChat === this.originalChat) {
+        if (this.previousOriginalChat) {
+          this.bot._minebotOriginalChat = this.previousOriginalChat;
+        } else {
+          delete this.bot._minebotOriginalChat;
+        }
+      }
     }
     this.originalChat = null;
+    this.rateLimitedChat = null;
+    this.immediateChat = null;
+    this.previousChatImmediate = null;
+    this.previousOriginalChat = null;
     return { success: true, message: '限速已关闭' };
   }
 

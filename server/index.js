@@ -353,11 +353,18 @@ app.post('/api/bot/restart', async (req, res) => {
 });
 
 // Toggle mode
-app.post('/api/bot/mode', (req, res) => {
+app.post('/api/bot/mode', async (req, res) => {
   try {
     const { mode, enabled } = req.body;
-    botManager.setMode(mode, enabled);
-    res.json({ success: true, modes: botManager.getModes() });
+    const modeResult = await botManager.setMode(mode, enabled);
+    const failed = Array.isArray(modeResult?.results)
+      ? modeResult.results.find(result => result?.success === false)
+      : modeResult?.result?.success === false ? modeResult.result : null;
+    res.json({
+      success: !failed,
+      message: failed?.message,
+      modes: modeResult?.modes || botManager.getModes()
+    });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
