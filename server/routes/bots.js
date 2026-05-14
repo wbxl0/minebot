@@ -237,6 +237,23 @@ export function registerBotRoutes(app, {
     }
   });
 
+  app.post('/api/bots/:id/command', (req, res) => {
+    try {
+      const { command } = req.body;
+      const bot = botManager.bots.get(req.params.id);
+      if (!bot) {
+        return res.status(404).json({ success: false, error: 'Bot not found' });
+      }
+      if (typeof bot.sendChatCommand !== 'function') {
+        return res.status(400).json({ success: false, error: 'Bot does not support chat commands' });
+      }
+      const result = bot.sendChatCommand(command);
+      res.status(result.success ? 200 : 400).json(result);
+    } catch (error) {
+      res.status(400).json({ success: false, error: error.message });
+    }
+  });
+
   app.post('/api/bots/:id/stop-all', (req, res) => {
     try {
       const bot = botManager.bots.get(req.params.id);

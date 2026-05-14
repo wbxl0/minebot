@@ -53,6 +53,8 @@ export class BotInstance {
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
     this.reconnectAttempts = 0; // 重连次数
+    this.pendingCommandFeedback = null;
+    this.commandFeedbackTimer = null;
 
     // 每个机器人独立的日志
     this.logs = [];
@@ -250,6 +252,80 @@ export class BotInstance {
     return this.logs;
   }
 
+  sendChatCommand(command) {
+    if (!this.bot || !this.status.connected) {
+      return { success: false, message: 'Bot 未连接' };
+    }
+
+    const text = String(command || '').trim();
+    if (!text) {
+      return { success: false, message: '命令不能为空' };
+    }
+
+    const beforePos = this.bot.entity?.position?.clone?.() || null;
+    this.bot.chat(text);
+    this.log('info', `已发送命令: ${text}，等待服务器响应`, '📤');
+
+    if (this.commandFeedbackTimer) {
+      clearTimeout(this.commandFeedbackTimer);
+    }
+
+    this.pendingCommandFeedback = {
+      command: text,
+      beforePos,
+      startedAt: Date.now(),
+      sawResponse: false
+    };
+
+    this.commandFeedbackTimer = setTimeout(() => {
+      const pending = this.pendingCommandFeedback;
+      if (!pending || pending.command !== text) return;
+
+      const afterPos = this.bot?.entity?.position || null;
+      const moved = pending.beforePos && afterPos && pending.beforePos.distanceTo(afterPos) >= 8;
+      if (!pending.sawResponse && moved) {
+        this.log('success', `命令可能已生效，位置变化: ${Math.floor(pending.beforePos.x)} ${Math.floor(pending.beforePos.y)} ${Math.floor(pending.beforePos.z)} -> ${Math.floor(afterPos.x)} ${Math.floor(afterPos.y)} ${Math.floor(afterPos.z)}`, '✅');
+      } else if (!pending.sawResponse) {
+        this.log('warning', `命令已发送但服务器无明确反馈: ${text}`, '⚠️');
+      }
+
+      this.pendingCommandFeedback = null;
+      this.commandFeedbackTimer = null;
+    }, 5000);
+
+    if (typeof this.commandFeedbackTimer.unref === 'function') {
+      this.commandFeedbackTimer.unref();
+    }
+
+    return { success: true, message: '命令已发送，等待服务器响应' };
+  }
+
+  handleCommandFeedback(message) {
+    if (!this.pendingCommandFeedback) return;
+    const text = String(message || '').trim();
+    if (!text) return;
+
+    const lower = text.toLowerCase();
+    const noPermission = lower.includes('permission') || text.includes('没有权限') || text.includes('无权限') || text.includes('权限不足');
+    const unknownCommand = lower.includes('unknown command') || lower.includes('unknown or incomplete command') || text.includes('未知命令') || text.includes('不存在的命令');
+    const cooldown = lower.includes('cooldown') || text.includes('冷却') || text.includes('请等待');
+    const teleporting = lower.includes('teleport') || lower.includes('warping') || text.includes('传送') || text.includes('正在传送');
+
+    if (noPermission) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 没有权限 (${text})`, '🚫');
+    } else if (unknownCommand) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 未知命令 (${text})`, '❓');
+    } else if (cooldown) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 命令冷却中 (${text})`, '⏳');
+    } else if (teleporting) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('success', `服务器反馈: ${text}`, '✅');
+    }
+  }
+
   // 清空本机器人的日志
   clearLogs() {
     this.logs = [];
@@ -399,6 +475,11 @@ export class BotInstance {
       clearInterval(this.restartCommandTimer);
       this.restartCommandTimer = null;
     }
+    if (this.commandFeedbackTimer) {
+      clearTimeout(this.commandFeedbackTimer);
+      this.commandFeedbackTimer = null;
+    }
+    this.pendingCommandFeedback = null;
 
     // 停止所有行为
     if (this.behaviors) {
@@ -870,6 +951,10 @@ export class BotInstance {
           if (message.startsWith('!')) {
             await this.handleCommand(chatUsername, message);
           }
+        });
+
+        this.bot.on('message', (jsonMsg) => {
+          this.handleCommandFeedback(jsonMsg.toString());
         });
 
         this.bot.on('error', (err) => {

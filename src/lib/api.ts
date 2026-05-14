@@ -444,6 +444,13 @@ class ApiService {
     });
   }
 
+  async sendBotCommand(id: string, command: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/api/bots/${id}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    });
+  }
+
   async stopAllBehaviors(id: string): Promise<{ success: boolean; status: BotStatus }> {
     return this.request(`/api/bots/${id}/stop-all`, { method: 'POST' });
   }

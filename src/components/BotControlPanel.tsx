@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -205,6 +206,7 @@ export function BotControlPanel({
   const [isOpen, setIsOpen] = useState(false);
   const [followTarget, setFollowTarget] = useState<string>("");
   const [attackMode, setAttackMode] = useState<string>("hostile");
+  const [chatCommand, setChatCommand] = useState<string>("");
   const { toast } = useToast();
   const [behaviorStatus, setBehaviorStatus] = useState<BehaviorStatus | null>(null);
   const [behaviorLoading, setBehaviorLoading] = useState(false);
@@ -262,6 +264,31 @@ export function BotControlPanel({
       setLoading(null);
     }
   };
+
+  const handleSendCommand = async (command: string) => {
+    const text = command.trim();
+    if (!text) {
+      toast({ title: "错误", description: "命令不能为空", variant: "destructive" });
+      return;
+    }
+    if (!connected) {
+      toast({ title: "错误", description: "Bot 未连接", variant: "destructive" });
+      return;
+    }
+
+    setLoading("command");
+    try {
+      const result = await api.sendBotCommand(botId, text);
+      toast({ title: "已发送", description: result.message });
+      setChatCommand("");
+    } catch (error) {
+      toast({ title: "错误", description: String(error), variant: "destructive" });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const presetCommands = ["/spawn", "/home", "/warp afk", "/warp", "/help"];
 
   const formatPos = (pos?: { x: number; y: number; z: number } | null) => {
     if (!pos) return "未知";
@@ -423,6 +450,46 @@ export function BotControlPanel({
       {/* 以下内容只在连接后显示 */}
       {connected && (
         <>
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="flex gap-2">
+              <Input
+                value={chatCommand}
+                onChange={(e) => setChatCommand(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleSendCommand(chatCommand);
+                  }
+                }}
+                placeholder="输入聊天命令，例如 /spawn"
+                className="h-8 text-xs font-mono"
+                disabled={loading === "command"}
+              />
+              <Button
+                size="sm"
+                onClick={() => handleSendCommand(chatCommand)}
+                disabled={loading !== null || !chatCommand.trim()}
+              >
+                {loading === "command" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <MessageSquare className="h-4 w-4 mr-1" />}
+                <span className="text-xs">发送</span>
+              </Button>
+            </div>
+            <div className="flex gap-1 flex-wrap">
+              {presetCommands.map((command) => (
+                <Button
+                  key={command}
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs font-mono"
+                  onClick={() => handleSendCommand(command)}
+                  disabled={loading !== null}
+                >
+                  {command}
+                </Button>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">发送结果和服务器反馈会写入日志。</p>
+          </div>
+
           {/* 状态徽章 */}
           <div className="flex flex-wrap gap-1">
             {modes.invincible && <Badge className="bg-amber-600">无敌</Badge>}
