@@ -106,6 +106,22 @@ export class PanelInstance {
     };
   }
 
+  updateConfig(updates = {}) {
+    if (updates.name !== undefined) {
+      this.config.name = updates.name;
+      this.status.serverName = updates.name;
+    }
+    if (updates.host !== undefined) this.config.host = updates.host;
+    if (updates.port !== undefined) this.config.port = parseInt(updates.port);
+    if (updates.proxyNodeId !== undefined) this.config.proxyNodeId = updates.proxyNodeId;
+    if (updates.autoReconnect !== undefined) {
+      this.config.autoReconnect = !!updates.autoReconnect;
+    }
+
+    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+    return this.getStatus();
+  }
+
   /**
    * 检查面板配置是否有效
    */

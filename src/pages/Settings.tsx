@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
+import { autoChatTemplates, mergeAutoChatMessages } from "@/lib/autoChatTemplates";
 import { toast } from "sonner";
 
 interface SettingsData {
@@ -135,6 +136,16 @@ export default function SettingsPage() {
 
   const updateAutoChat = (key: string, value: boolean | number) => {
     setSettings(s => ({ ...s, autoChat: { ...s.autoChat, [key]: value } }));
+  };
+
+  const applyAutoChatTemplate = (templateId: string, replace = false) => {
+    const template = autoChatTemplates.find(item => item.id === templateId);
+    if (!template) return;
+    const nextText = replace
+      ? template.messages.join("\n")
+      : mergeAutoChatMessages(autoChatMessages, template.messages);
+    setAutoChatMessages(nextText);
+    setSettings(s => ({ ...s, autoChat: { ...s.autoChat, enabled: true } }));
   };
 
   const updateAutoRenew = (key: string, value: string | boolean | number) => {
@@ -363,11 +374,43 @@ export default function SettingsPage() {
 
               <div className="space-y-2">
                 <label className="text-sm text-muted-foreground">喊话内容 (每行一条)</label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {autoChatTemplates.map(template => (
+                    <Button
+                      key={template.id}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => applyAutoChatTemplate(template.id)}
+                      title={template.description}
+                    >
+                      {template.name}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => applyAutoChatTemplate("welcome", true)}
+                  >
+                    使用默认欢迎模板
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setAutoChatMessages("")}
+                  >
+                    清空
+                  </Button>
+                </div>
                 <Textarea
                   value={autoChatMessages}
                   onChange={(e) => setAutoChatMessages(e.target.value)}
                   placeholder="欢迎来到服务器！&#10;有问题可以问我 !ask [问题]&#10;需要帮助请输入 !help"
-                  rows={5}
+                  rows={8}
                 />
               </div>
             </div>

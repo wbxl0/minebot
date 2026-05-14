@@ -252,7 +252,7 @@ class ProxyService {
 
             fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
 
-            this.stop();
+            await this.stop();
 
             // Verify sing-box version/availability before starting
             try {
@@ -292,23 +292,27 @@ class ProxyService {
             }
             console.log(`[ProxyService] Final sing-box executable path: ${execPath}`);
 
-            this.proxyProcess = spawn(execPath, ['run', '-c', this.configPath]);
+            const child = spawn(execPath, ['run', '-c', this.configPath]);
+            this.proxyProcess = child;
 
-            this.proxyProcess.stdout.on('data', (data) => {
+            child.stdout.on('data', (data) => {
                 const msg = data.toString();
                 console.log(`[Proxy Log] ${msg.trim()}`);
             });
 
-            this.proxyProcess.stderr.on('data', (data) => {
+            child.stderr.on('data', (data) => {
                 const msg = data.toString();
                 console.error(`[Proxy STDOUT/ERR] ${msg.trim()}`);
             });
 
-            this.proxyProcess.on('error', (err) => {
+            child.on('error', (err) => {
                 console.error(`[ProxyService] Failed to start sing-box process:`, err.message);
             });
 
-            this.proxyProcess.on('close', (code) => {
+            child.on('close', (code) => {
+                if (this.proxyProcess === child) {
+                    this.proxyProcess = null;
+                }
                 if (code !== 0 && code !== null) {
                     console.error(`[ProxyService] sing-box exited with code ${code}`);
                 }
@@ -319,11 +323,32 @@ class ProxyService {
         }
     }
 
-    stop() {
-        if (this.proxyProcess) {
-            this.proxyProcess.kill();
-            this.proxyProcess = null;
-        }
+    async stop(timeoutMs = 5000) {
+        const child = this.proxyProcess;
+        if (!child) return;
+
+        this.proxyProcess = null;
+        if (child.exitCode !== null || child.killed) return;
+
+        await new Promise((resolve) => {
+            const cleanup = () => {
+                clearTimeout(forceKillTimer);
+                clearTimeout(timeoutTimer);
+                child.off('close', cleanup);
+                child.off('exit', cleanup);
+                resolve();
+            };
+            const timeoutTimer = setTimeout(() => {
+                if (child.exitCode === null && !child.killed) {
+                    child.kill('SIGKILL');
+                }
+            }, timeoutMs);
+            const forceKillTimer = setTimeout(resolve, timeoutMs + 1000);
+
+            child.once('close', cleanup);
+            child.once('exit', cleanup);
+            child.kill();
+        });
     }
 
     async restart(nodes) {

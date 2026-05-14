@@ -18,6 +18,7 @@ import {
   Zap,
   Cpu,
   Activity,
+  Shuffle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ import {
 import { api, BotStatus } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { formatUptime, formatSize } from "@/lib/utils";
+import { generateBotUsername } from "@/lib/botUsername";
 import { ServerDetailDialog } from "./ServerDetailDialog";
 import {
   DndContext,
@@ -92,6 +94,7 @@ function SortableServerCard({
 
   const isPanel = server.type === "panel";
   const agentOnline = server.agentStatus?.connected;
+  const botUsername = server.configuredUsername || server.runtimeUsername || server.username || "";
 
   return (
     <div
@@ -135,6 +138,11 @@ function SortableServerCard({
         <h3 className="font-medium truncate mb-1">
           {server.name || server.id}
         </h3>
+        {!isPanel && botUsername && (
+          <p className="text-xs text-muted-foreground font-mono truncate">
+            {botUsername}
+          </p>
+        )}
       </div>
 
       {/* 底部运行状态 (三元组网格) */}
@@ -576,11 +584,24 @@ export function MultiServerPanel() {
                             </div>
                             <div className="space-y-1">
                               <Label>用户名 (留空随机)</Label>
-                              <Input
-                                placeholder="自动生成"
-                                value={newServer.username}
-                                onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
-                              />
+                              <div className="flex gap-2">
+                                <Input
+                                  placeholder="自动生成"
+                                  value={newServer.username}
+                                  onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
+                                  className="font-mono"
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="shrink-0"
+                                  title="随机生成固定用户名"
+                                  onClick={() => setNewServer({ ...newServer, username: generateBotUsername() })}
+                                >
+                                  <Shuffle className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                           <div className="grid grid-cols-3 gap-3">

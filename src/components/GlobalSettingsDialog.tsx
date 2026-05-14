@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { api, TelegramConfig, ProxyNode } from "@/lib/api";
-import { Loader2, Save, Send, Lock, Globe, Plus, Trash2, Link as LinkIcon, RefreshCw, Zap, Settings2 } from "lucide-react";
+import { api, TelegramConfig, ProxyNode, WebhookConfig } from "@/lib/api";
+import { Loader2, Save, Lock, Globe, Plus, Trash2, Link as LinkIcon, RefreshCw, Zap, Settings2, Webhook } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -27,6 +27,10 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
         enabled: false,
         botToken: "",
         chatId: ""
+    });
+    const [webhookConfig, setWebhookConfig] = useState<WebhookConfig>({
+        enabled: false,
+        token: ""
     });
 
     const [passwordData, setPasswordData] = useState({
@@ -61,6 +65,12 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
                     baseURL: fullConfig.ai.baseURL || "",
                     model: fullConfig.ai.model || "gpt-3.5-turbo",
                     systemPrompt: fullConfig.ai.systemPrompt || ""
+                });
+            }
+            if (fullConfig?.webhook) {
+                setWebhookConfig({
+                    enabled: fullConfig.webhook.enabled === true,
+                    token: fullConfig.webhook.token || ""
                 });
             }
         } catch (error) {
@@ -233,6 +243,48 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
         }
     };
 
+    const generateWebhookToken = () => {
+        const bytes = new Uint8Array(32);
+        window.crypto.getRandomValues(bytes);
+        const token = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+        setWebhookConfig(prev => ({ ...prev, token, enabled: true }));
+    };
+
+    const handleSaveWebhook = async () => {
+        if (webhookConfig.enabled && !webhookConfig.token.trim()) {
+            toast({
+                title: "保存失败",
+                description: "启用 Webhook 前需要配置 Token",
+                variant: "destructive",
+            });
+            return;
+        }
+
+        try {
+            setSaving(true);
+            await api.saveSettings({
+                webhook: {
+                    enabled: webhookConfig.enabled,
+                    token: webhookConfig.token.trim()
+                }
+            });
+            toast({
+                title: "保存成功",
+                description: "Webhook Token 配置已更新",
+            });
+            onOpenChange(false);
+        } catch (error) {
+            console.error("Failed to save webhook settings:", error);
+            toast({
+                title: "保存失败",
+                description: "无法保存 Webhook 配置",
+                variant: "destructive",
+            });
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const handleSyncSubscription = async () => {
         const url = prompt("请输入订阅链接 URL:");
         if (!url) return;
@@ -279,8 +331,9 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
                     </DialogHeader>
 
                     <Tabs defaultValue="telegram" className="w-full">
-                        <TabsList className="grid w-full grid-cols-4">
+                        <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-5">
                             <TabsTrigger value="telegram">Telegram 通知</TabsTrigger>
+                            <TabsTrigger value="webhook">Webhook</TabsTrigger>
                             <TabsTrigger value="ai">AI</TabsTrigger>
                             <TabsTrigger value="proxy">代理管理</TabsTrigger>
                             <TabsTrigger value="security">账号安全</TabsTrigger>
@@ -339,6 +392,61 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
                                     {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                     <Save className="mr-2 h-4 w-4" />
                                     保存配置
+                                </Button>
+                            </div>
+                        </TabsContent>
+
+                        <TabsContent value="webhook" className="space-y-4 py-4">
+                            <div className="flex items-center justify-between space-x-2 border-b pb-4">
+                                <Label htmlFor="webhook-enabled" className="flex flex-col space-y-1">
+                                    <span className="flex items-center gap-2">
+                                        <Webhook className="h-4 w-4 text-primary" />
+                                        启用 Webhook Token
+                                    </span>
+                                    <span className="font-normal text-xs text-muted-foreground">
+                                        外部平台触发自动开机时必须携带这个 Token
+                                    </span>
+                                </Label>
+                                <Switch
+                                    id="webhook-enabled"
+                                    checked={webhookConfig.enabled}
+                                    onCheckedChange={(checked) => setWebhookConfig(prev => ({ ...prev, enabled: checked }))}
+                                />
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="grid gap-2">
+                                    <Label htmlFor="webhook-token">Webhook Token</Label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            id="webhook-token"
+                                            type="password"
+                                            placeholder="点击生成或输入自定义 Token"
+                                            value={webhookConfig.token}
+                                            onChange={(e) => setWebhookConfig(prev => ({ ...prev, token: e.target.value }))}
+                                            disabled={!webhookConfig.enabled}
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={generateWebhookToken}
+                                            disabled={saving || loading}
+                                        >
+                                            <RefreshCw className="mr-2 h-4 w-4" />
+                                            生成
+                                        </Button>
+                                    </div>
+                                    <p className="text-[0.8rem] text-muted-foreground">
+                                        推荐放在请求头 X-Webhook-Token，也兼容 Authorization: Bearer 或 URL 参数 token。
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-end pt-4">
+                                <Button onClick={handleSaveWebhook} disabled={saving || loading}>
+                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    <Save className="mr-2 h-4 w-4" />
+                                    保存 Webhook 配置
                                 </Button>
                             </div>
                         </TabsContent>

@@ -109,18 +109,21 @@ export class BotPool {
         console.log(`已加载服务器: ${serverConfig.name || serverConfig.id} (${serverConfig.type || 'minecraft'})`);
       }
 
-      // 然后并行连接所有服务器（不阻塞）
-      for (const serverConfig of servers) {
+      // 然后错峰连接所有服务器（不阻塞），避免大量 Bot 同时登录造成峰值压力
+      let panelIndex = 0;
+      let gameIndex = 0;
+      servers.forEach((serverConfig) => {
         const instance = this.bots.get(serverConfig.id);
         const type = serverConfig.type || 'minecraft';
-        // 使用 setTimeout 确保不阻塞主线程，游戏服务器延迟一点避免同时连接
-        const delay = type === 'panel' ? 0 : 500;
+        const delay = type === 'panel'
+          ? panelIndex++ * 250
+          : 500 + gameIndex++ * 1500;
         setTimeout(() => {
           instance.connect().catch(err => {
             console.log(`${type === 'panel' ? '面板' : '游戏'}服务器 ${serverConfig.name || serverConfig.id} 连接失败: ${err.message}`);
           });
         }, delay);
-      }
+      });
     }
   }
 
@@ -227,23 +230,28 @@ export class BotPool {
       // Multi-server info
       totalBots: this.bots.size,
       connectedBots: connectedBots.length,
-      botList: Array.from(this.bots.values()).map(b => ({
-        id: b.id,
-        name: b.status.serverName,
-        type: b.status.type || 'minecraft',
-        connected: b.status.connected,
-        serverAddress: b.status.serverAddress || (b.status.serverHost ? `${b.status.serverHost}:${b.status.serverPort}` : ''),
-        username: b.status.username,
-        players: b.status.players || [],
-        // 面板服务器状态
-        panelServerState: b.status.panelServerState || null,
-        panelServerStats: b.status.panelServerStats || null,
-        // TCP ping 状态（仅面板服务器）
-        tcpOnline: b.status.tcpOnline ?? null,
-        tcpLatency: b.status.tcpLatency ?? null,
-        serverHost: b.status.serverHost || null,
-        serverPort: b.status.serverPort || null
-      }))
+      botList: Array.from(this.bots.values()).map(b => {
+        const status = typeof b.getStatus === 'function' ? b.getStatus() : b.status;
+        return {
+          id: b.id,
+          name: status.serverName || status.name,
+          type: status.type || 'minecraft',
+          connected: status.connected,
+          serverAddress: status.serverAddress || (status.serverHost ? `${status.serverHost}:${status.serverPort}` : ''),
+          username: status.username,
+          configuredUsername: status.configuredUsername || '',
+          runtimeUsername: status.runtimeUsername || '',
+          players: status.players || [],
+          // 面板服务器状态
+          panelServerState: status.panelServerState || null,
+          panelServerStats: status.panelServerStats || null,
+          // TCP ping 状态（仅面板服务器）
+          tcpOnline: status.tcpOnline ?? null,
+          tcpLatency: status.tcpLatency ?? null,
+          serverHost: status.serverHost || null,
+          serverPort: status.serverPort || null
+        };
+      })
     };
   }
 

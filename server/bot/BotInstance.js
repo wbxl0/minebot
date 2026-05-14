@@ -25,6 +25,7 @@ const EMERGENCY_HEALTH_THRESHOLD = 8;
 const CRITICAL_HEALTH_THRESHOLD = 4;
 const EMERGENCY_RESCUE_COOLDOWN_MS = 8000;
 const SURVIVAL_CHECK_INTERVAL_MS = 1000;
+const SURVIVAL_TICK_INTERVAL_MS = 1500;
 const ENVIRONMENT_RESCUE_COOLDOWN_MS = 2500;
 const DANGEROUS_BLOCK_NAMES = new Set([
   'lava',
@@ -61,6 +62,7 @@ export class BotInstance {
     this.id = id;
     // 深拷贝config，防止外部修改影响连接地址
     this.config = JSON.parse(JSON.stringify(config));
+    this.config.username = String(this.config.username || '').trim();
     this.aiService = aiService;
     this.onLog = onLog;
     this.onStatusChange = onStatusChange;
@@ -72,6 +74,7 @@ export class BotInstance {
     this.connectionTimeout = null;
     this.reconnectTimeout = null;
     this.activityMonitorInterval = null;
+    this.survivalCheckInterval = null;
     this.autoChatInterval = null;
     this.restartCommandTimer = null; // 定时发送 /restart 命令
     this.lastActivity = Date.now();
@@ -392,13 +395,17 @@ export class BotInstance {
   }
 
   getStatus() {
+    const configuredUsername = this.config.username || '';
+    const runtimeUsername = this.status.connected ? (this.status.username || '') : '';
     return {
       ...this.status,
       // 添加配置中的服务器连接信息
       host: this.config.host,
       port: this.config.port,
       name: this.config.name || this.status.serverName,
-      username: this.status.username || this.config.username,
+      username: runtimeUsername || configuredUsername,
+      configuredUsername,
+      runtimeUsername,
       modes: this.modes,
       autoChat: this.autoChatConfig,
       behaviors: this.behaviors?.getStatus() || null,
@@ -407,10 +414,39 @@ export class BotInstance {
     };
   }
 
+  updateConfig(updates = {}) {
+    if (updates.name !== undefined) {
+      this.config.name = updates.name;
+      this.status.serverName = updates.name;
+    }
+    if (updates.username !== undefined) {
+      this.config.username = String(updates.username || '').trim();
+      this.nextUsername = null;
+      this.usernameRetryCount = 0;
+      if (!this.status.connected) {
+        this.status.username = this.config.username;
+      }
+    }
+    if (updates.host !== undefined) this.config.host = updates.host;
+    if (updates.port !== undefined) this.config.port = parseInt(updates.port);
+    if (updates.proxyNodeId !== undefined) this.config.proxyNodeId = updates.proxyNodeId;
+    if (updates.autoReconnect !== undefined) {
+      this.status.autoReconnect = !!updates.autoReconnect;
+      this.config.autoReconnect = !!updates.autoReconnect;
+    }
+
+    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
+    return this.getStatus();
+  }
+
   cleanup() {
     if (this.activityMonitorInterval) {
       clearInterval(this.activityMonitorInterval);
       this.activityMonitorInterval = null;
+    }
+    if (this.survivalCheckInterval) {
+      clearInterval(this.survivalCheckInterval);
+      this.survivalCheckInterval = null;
     }
     if (this.autoChatInterval) {
       clearInterval(this.autoChatInterval);
@@ -472,6 +508,24 @@ export class BotInstance {
         this.attemptRepair('无响应');
       }
     }, 30000); // 每30秒检查一次
+  }
+
+  startSurvivalMonitor() {
+    if (this.survivalCheckInterval) {
+      clearInterval(this.survivalCheckInterval);
+    }
+
+    this.survivalCheckInterval = setInterval(() => {
+      if (!this.bot || !this.status.connected || !this.bot.entity) return;
+      const result = this.runSurvivalCheck('timer');
+      if (!result.safe && this.onStatusChange) {
+        this.onStatusChange(this.id, this.getStatus());
+      }
+    }, SURVIVAL_TICK_INTERVAL_MS);
+
+    if (typeof this.survivalCheckInterval.unref === 'function') {
+      this.survivalCheckInterval.unref();
+    }
   }
 
   /**
@@ -630,6 +684,7 @@ export class BotInstance {
           this.usernameRetryCount = 0;
           this.updateActivity();
           this.startActivityMonitor();
+          this.startSurvivalMonitor();
 
           if (this.modes.autoChat) {
             this.startAutoChat();

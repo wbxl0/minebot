@@ -19,6 +19,8 @@ export interface BotStatus {
   host: string;
   port: number;
   username?: string;
+  configuredUsername?: string;
+  runtimeUsername?: string;
   connected: boolean;
   serverAddress: string;
   version: string;
@@ -143,6 +145,10 @@ export interface Config {
     botToken: string;
     chatId: string;
   };
+  webhook: {
+    enabled: boolean;
+    token: string;
+  };
   proxyNodes: ProxyNode[];
 }
 
@@ -150,6 +156,11 @@ export interface TelegramConfig {
   enabled: boolean;
   botToken: string;
   chatId: string;
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  token: string;
 }
 
 
