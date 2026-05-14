@@ -37,7 +37,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const shouldReconnectRef = useRef(true);
   const connectRef = useRef<() => void>(() => {});
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 1000; // 1 秒
@@ -51,20 +50,21 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   };
 
   const scheduleReconnect = useCallback(() => {
-    if (!shouldReconnectRef.current) return;
     if (!navigator.onLine) {
       console.warn('[WebSocket] offline, waiting for network');
       return;
     }
-    const attempt = reconnectAttemptsRef.current;
-    const delayAttempt = Math.min(attempt, maxReconnectAttempts);
-    const expDelay = baseReconnectDelay * Math.pow(2, delayAttempt);
+    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+      console.error('[WebSocket] 达到最大重连次数，停止重连');
+      reconnectAttemptsRef.current = 0;
+      return;
+    }
+    const expDelay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
     const cappedDelay = Math.min(expDelay, maxReconnectDelay);
     const jitter = 0.8 + Math.random() * 0.4;
     const delay = Math.floor(cappedDelay * jitter);
-    reconnectAttemptsRef.current = attempt + 1;
-    const label = attempt >= maxReconnectAttempts ? '持续低频重连' : `第 ${reconnectAttemptsRef.current} 次重连`;
-    console.log(`[WebSocket] ${label}，延迟 ${delay}ms`);
+    reconnectAttemptsRef.current += 1;
+    console.log(`[WebSocket] 第 ${reconnectAttemptsRef.current} 次重连，延迟 ${delay}ms`);
     clearReconnectTimeout();
     reconnectTimeoutRef.current = window.setTimeout(() => {
       connectRef.current();
@@ -72,14 +72,13 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connect = useCallback(() => {
-    if (!shouldReconnectRef.current) return;
     const token = localStorage.getItem('token');
     if (!token) {
       setConnected(false);
       return;
     }
 
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
       const ws = new WebSocket(getWsUrl());
@@ -157,9 +156,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       };
 
       ws.onclose = (event) => {
-        if (wsRef.current === ws) {
-          wsRef.current = null;
-        }
         setConnected(false);
         console.log('WebSocket disconnected', event.code);
 
@@ -186,22 +182,17 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, [connect]);
 
   useEffect(() => {
-    shouldReconnectRef.current = true;
     connect();
 
     return () => {
-      shouldReconnectRef.current = false;
       clearReconnectTimeout();
       wsRef.current?.close();
-      wsRef.current = null;
     };
   }, [connect]);
 
   // Reconnect when token changes
   useEffect(() => {
     const handleStorageChange = () => {
-      reconnectAttemptsRef.current = 0;
-      clearReconnectTimeout();
       if (wsRef.current) {
         wsRef.current.close();
       }

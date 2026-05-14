@@ -17,7 +17,6 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, ProxyNode, AgentInfo } from "@/lib/api";
-import { autoChatTemplates, mergeAutoChatMessages } from "@/lib/autoChatTemplates";
 import { useToast } from "@/hooks/use-toast";
 
 interface BotSettingsPanelProps {
@@ -250,16 +249,6 @@ export function BotSettingsPanel({
     const [agentList, setAgentList] = useState<AgentInfo[]>([]);
     const [agentId, setAgentId] = useState<string>("");
     const [agentToken, setAgentToken] = useState<string>("");
-
-    const applyAutoChatTemplate = (templateId: string, replace = false) => {
-        const template = autoChatTemplates.find(item => item.id === templateId);
-        if (!template) return;
-        const nextText = replace
-            ? template.messages.join("\n")
-            : mergeAutoChatMessages(autoChatMessages, template.messages);
-        setAutoChatMessages(nextText);
-        if (!autoChatEnabled) setAutoChatEnabled(true);
-    };
 
     const fetchBehaviorStatus = useCallback(async () => {
         setBehaviorLoading(true);
@@ -1103,43 +1092,11 @@ security:
                 </div>
                 <div className="space-y-2">
                     <Label>消息列表 (每行一条)</Label>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {autoChatTemplates.map(template => (
-                            <Button
-                                key={template.id}
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => applyAutoChatTemplate(template.id)}
-                                title={template.description}
-                            >
-                                {template.name}
-                            </Button>
-                        ))}
-                    </div>
-                    <div className="flex gap-2">
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => applyAutoChatTemplate("welcome", true)}
-                        >
-                            使用默认欢迎模板
-                        </Button>
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setAutoChatMessages("")}
-                        >
-                            清空
-                        </Button>
-                    </div>
                     <Textarea
                         value={autoChatMessages}
                         onChange={(e) => setAutoChatMessages(e.target.value)}
-                        placeholder="欢迎来到服务器！&#10;有问题可以问我 !ask [问题]&#10;需要帮助请输入 !help"
-                        rows={8}
+                        placeholder="欢迎来到服务器！&#10;有问题可以问我&#10;需要帮助请输入 !help"
+                        rows={4}
                     />
                 </div>
                 <Button

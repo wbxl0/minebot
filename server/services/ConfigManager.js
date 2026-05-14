@@ -197,10 +197,6 @@ export class ConfigManager {
         botToken: '',
         chatId: ''
       },
-      webhook: {
-        enabled: false,
-        token: ''
-      },
       auth: {
         username: 'admin',
         password: 'admin123'
@@ -211,12 +207,7 @@ export class ConfigManager {
         messages: [
           '欢迎来到服务器！',
           '有问题可以问我 !ask [问题]',
-          '需要帮助请输入 !help',
-          '新玩家可以先看看公告和规则，避免错过重要信息。',
-          '外出探索前记得带食物、火把和备用工具。',
-          '下矿时注意脚下，岩浆附近先蹲住再挖。',
-          '贵重物品建议及时放箱子，别全带在身上。',
-          '我在后台待命，有需要可以叫我。'
+          '需要帮助请输入 !help'
         ]
       },
       autoRenew: {
@@ -255,10 +246,6 @@ export class ConfigManager {
       telegram: {
         ...this.config.telegram,
         botToken: this.config.telegram?.botToken ? '***' : ''
-      },
-      webhook: {
-        ...this.config.webhook,
-        token: this.config.webhook?.token ? '***' : ''
       }
     };
   }

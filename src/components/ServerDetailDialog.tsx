@@ -22,12 +22,10 @@ import {
   Activity,
   Server,
   FolderOpen,
-  Shuffle,
 } from "lucide-react";
 import { api, BotStatus } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { formatUptime, formatSize } from "@/lib/utils";
-import { generateBotUsername } from "@/lib/botUsername";
 import { BotControlPanel } from "./BotControlPanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { FileManager } from "./FileManager";
@@ -78,10 +76,6 @@ export function ServerDetailDialog({
   const contentRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const { logs } = useWebSocketContext();
-  const isPanel = server?.type === "panel";
-  const configuredUsername = server?.configuredUsername || "";
-  const runtimeUsername = server?.runtimeUsername || "";
-  const displayUsername = runtimeUsername || configuredUsername;
 
   // 切换标签或打开面板时重置滚动位置
   useEffect(() => {
@@ -95,22 +89,17 @@ export function ServerDetailDialog({
     });
   }, [activeTab, open, server?.id]);
 
-  useEffect(() => {
-    if (!open) {
-      setEditing(false);
-    }
-  }, [open, server?.id]);
-
   // 初始化编辑表单
   useEffect(() => {
-    if (!server || editing) return;
-    setEditForm({
-      name: server.name || "",
-      host: server.host || "",
-      port: server.port ? String(server.port) : "",
-      username: server.configuredUsername ?? "",
-    });
-  }, [editing, server?.configuredUsername, server?.host, server?.id, server?.name, server?.port]);
+    if (server) {
+      setEditForm({
+        name: server.name || "",
+        host: server.host || "",
+        port: server.port ? String(server.port) : "",
+        username: server.username || "",
+      });
+    }
+  }, [server]);
 
   // 优化日志显示（只显示当前服务器的日志）
   const displayLogs = useMemo(() => {
@@ -132,12 +121,11 @@ export function ServerDetailDialog({
   // 保存编辑
   const handleSave = async () => {
     if (!server) return;
-    const username = editForm.username.trim();
 
     // 验证用户名格式
-    if (username) {
+    if (editForm.username) {
       const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/;
-      if (!usernameRegex.test(username)) {
+      if (!usernameRegex.test(editForm.username)) {
         toast({
           title: "用户名格式错误",
           description: "用户名必须是3-16个字符，只能包含字母、数字和下划线",
@@ -149,25 +137,13 @@ export function ServerDetailDialog({
 
     setLoading(true);
     try {
-      const usernameChanged = !isPanel && username !== (server.configuredUsername || "");
-      const updates: {
-        name?: string;
-        host?: string;
-        port?: number;
-        username?: string;
-      } = {
+      await api.updateServer(server.id, {
         name: editForm.name || undefined,
         host: editForm.host || undefined,
         port: editForm.port ? parseInt(editForm.port) : 0,
-      };
-      if (!isPanel) updates.username = username;
-      await api.updateServer(server.id, updates);
-      toast({
-        title: "成功",
-        description: usernameChanged && server.connected
-          ? "服务器配置已更新，用户名会在下次重连后生效"
-          : "服务器配置已更新"
+        username: editForm.username || undefined,
       });
+      toast({ title: "成功", description: "服务器配置已更新" });
       setEditing(false);
       onUpdate();
     } catch (error) {
@@ -212,6 +188,8 @@ export function ServerDetailDialog({
   }, [activeTab, loadAgentData]);
 
   if (!server) return null;
+
+  const isPanel = server.type === "panel";
 
   const agentConfigured = !!server?.agentStatus?.connected || !!server?.agentStatus?.lastSeen;
 
@@ -329,10 +307,10 @@ export function ServerDetailDialog({
                           : `${server.host}${server.port ? `:${server.port}` : ''}`}
                       </span>
                     </div>
-                    {!isPanel && displayUsername && (
+                    {!isPanel && server.username && (
                       <div className="flex flex-col gap-1">
                         <span className="text-muted-foreground text-xs uppercase tracking-wider">用户名</span>
-                        <span className="font-medium">{displayUsername}</span>
+                        <span className="font-medium">{server.username}</span>
                       </div>
                     )}
                     {server.connected && server.position && (
@@ -376,7 +354,7 @@ export function ServerDetailDialog({
                 {/* Bot 控制面板 */}
               <BotControlPanel
                 botId={server.id}
-                botName={runtimeUsername || server.username || server.name}
+                botName={server.username || server.name}
                 connected={server.connected || false}
                 serverType={server.type || "minecraft"}
                 panelServerState={server.panelServerState}
@@ -422,24 +400,12 @@ export function ServerDetailDialog({
                           {!isPanel && (
                             <div className="space-y-2">
                               <Label>机器人用户名</Label>
-                              <div className="flex gap-2">
-                                <Input
-                                  value={editForm.username}
-                                  onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
-                                  placeholder="留空自动生成"
-                                  className="bg-background/50 font-mono"
-                                />
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="icon"
-                                  className="shrink-0"
-                                  title="随机生成固定用户名"
-                                  onClick={() => setEditForm({ ...editForm, username: generateBotUsername() })}
-                                >
-                                  <Shuffle className="h-4 w-4" />
-                                </Button>
-                              </div>
+                              <Input
+                                value={editForm.username}
+                                onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
+                                placeholder="Bot Name"
+                                className="bg-background/50"
+                              />
                             </div>
                           )}
                         </div>
@@ -489,13 +455,7 @@ export function ServerDetailDialog({
                           {!isPanel && (
                             <div className="grid grid-cols-3">
                               <dt className="text-muted-foreground">机器人名称</dt>
-                              <dd className="col-span-2 font-mono">{configuredUsername || "自动生成"}</dd>
-                            </div>
-                          )}
-                          {!isPanel && runtimeUsername && runtimeUsername !== configuredUsername && (
-                            <div className="grid grid-cols-3">
-                              <dt className="text-muted-foreground">当前在线名</dt>
-                              <dd className="col-span-2 font-mono">{runtimeUsername}</dd>
+                              <dd className="col-span-2 font-mono">{server.username || "自动生成"}</dd>
                             </div>
                           )}
                           <div className="grid grid-cols-3">

@@ -1,16 +1,3 @@
-const MINECRAFT_USERNAME_REGEX = /^[a-zA-Z0-9_]{3,16}$/;
-
-function normalizeMinecraftUsername(value) {
-  if (value === undefined || value === null) return undefined;
-  return String(value).trim();
-}
-
-function validateMinecraftUsername(username) {
-  if (username === undefined || username === '') return null;
-  if (MINECRAFT_USERNAME_REGEX.test(username)) return null;
-  return 'Username must be 3-16 characters and contain only letters, numbers, and underscores';
-}
-
 export function registerBotRoutes(app, {
   botManager,
   configManager,
@@ -35,25 +22,15 @@ export function registerBotRoutes(app, {
   // Add new server
   app.post('/api/bots/add', async (req, res) => {
     try {
-      const requestConfig = { ...(req.body || {}) };
-      const normalizedUsername = normalizeMinecraftUsername(requestConfig.username);
-      const usernameError = validateMinecraftUsername(normalizedUsername);
-      if (usernameError) {
-        return res.status(400).json({ success: false, error: usernameError });
-      }
-      if (normalizedUsername !== undefined) {
-        requestConfig.username = normalizedUsername;
-      }
-
       let serverConfig;
       let created = false;
       let agentPayload = null;
       try {
-        serverConfig = configManager.addServer(requestConfig);
+        serverConfig = configManager.addServer(req.body);
         created = true;
       } catch (e) {
         const servers = configManager.getServers();
-        serverConfig = servers.find(s => s.id === requestConfig.id) || requestConfig;
+        serverConfig = servers.find(s => s.id === req.body.id) || req.body;
       }
 
       if (created && !serverConfig.agentId) {
@@ -98,14 +75,17 @@ export function registerBotRoutes(app, {
   // Update server config (name, username, host, port)
   app.put('/api/bots/:id', async (req, res) => {
     try {
-      const body = req.body || {};
-      const { name, host, port } = body;
-      const username = normalizeMinecraftUsername(body.username);
+      const { name, username, host, port } = req.body;
       const id = req.params.id;
 
-      const usernameError = validateMinecraftUsername(username);
-      if (usernameError) {
-        return res.status(400).json({ success: false, error: usernameError });
+      if (username !== undefined && username !== '') {
+        const usernameRegex = /^[a-zA-Z0-9_]{3,16}$/;
+        if (!usernameRegex.test(username)) {
+          return res.status(400).json({
+            success: false,
+            error: '用户名必须是3-16个字符，只能包含字母、数字和下划线'
+          });
+        }
       }
 
       const updates = {};
@@ -113,34 +93,30 @@ export function registerBotRoutes(app, {
       if (username !== undefined) updates.username = username;
       if (host !== undefined) updates.host = host;
       if (port !== undefined) updates.port = parseInt(port);
-      if (body.proxyNodeId !== undefined) updates.proxyNodeId = body.proxyNodeId;
-      if (body.autoReconnect !== undefined) updates.autoReconnect = !!body.autoReconnect;
+      if (req.body.proxyNodeId !== undefined) updates.proxyNodeId = req.body.proxyNodeId;
+      if (req.body.autoReconnect !== undefined) updates.autoReconnect = !!req.body.autoReconnect;
 
       const updatedConfig = configManager.updateServer(id, updates);
 
       const bot = botManager.bots.get(id);
       if (bot) {
-        if (typeof bot.updateConfig === 'function') {
-          bot.updateConfig(updates);
-        } else {
-          if (name !== undefined) {
-            bot.status.serverName = name;
-            bot.config.name = name;
+        if (name !== undefined) {
+          bot.status.serverName = name;
+          bot.config.name = name;
+        }
+        if (username !== undefined) {
+          bot.config.username = username;
+          if (!bot.status.connected) {
+            bot.status.username = username;
           }
-          if (username !== undefined) {
-            bot.config.username = username;
-            if (!bot.status.connected) {
-              bot.status.username = username;
-            }
-          }
-          if (host !== undefined) bot.config.host = host;
-          if (port !== undefined) bot.config.port = parseInt(port);
+        }
+        if (host !== undefined) bot.config.host = host;
+        if (port !== undefined) bot.config.port = parseInt(port);
 
-          if (body.proxyNodeId !== undefined) bot.config.proxyNodeId = body.proxyNodeId;
-          if (body.autoReconnect !== undefined) {
-            bot.status.autoReconnect = !!body.autoReconnect;
-            bot.config.autoReconnect = !!body.autoReconnect;
-          }
+        if (req.body.proxyNodeId !== undefined) bot.config.proxyNodeId = req.body.proxyNodeId;
+        if (req.body.autoReconnect !== undefined) {
+          bot.status.autoReconnect = !!req.body.autoReconnect;
+          bot.config.autoReconnect = !!req.body.autoReconnect;
         }
 
         if ((host !== undefined || port !== undefined) && bot.refreshStatusCheck) {

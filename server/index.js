@@ -52,36 +52,6 @@ function maskSensitiveData(text) {
     .replace(/(ptero[a-z]*url|panel[a-z]*url)[=:\s]+[^\s,}]+/gi, '$1=***');
 }
 
-function getRequestToken(req) {
-  const headerToken = req.get('x-webhook-token') || req.get('x-webhook-secret');
-  const authHeader = req.get('authorization');
-  if (headerToken) return headerToken;
-  if (authHeader?.toLowerCase().startsWith('bearer ')) {
-    return authHeader.slice(7).trim();
-  }
-  return req.query.token || req.query.secret || req.body?.token || req.body?.secret || '';
-}
-
-function tokensMatch(expected, actual) {
-  if (!expected || !actual) return false;
-  const expectedBuffer = Buffer.from(String(expected));
-  const actualBuffer = Buffer.from(String(actual));
-  if (expectedBuffer.length !== actualBuffer.length) return false;
-  return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
-}
-
-function verifyWebhookToken(req) {
-  const webhook = configManager.getFullConfig().webhook || {};
-  const configuredToken = webhook.token || process.env.WEBHOOK_TOKEN || '';
-  if (webhook.enabled === false || !configuredToken) {
-    return { ok: false, status: 503, message: 'Webhook is disabled or token is not configured' };
-  }
-  if (!tokensMatch(configuredToken, getRequestToken(req))) {
-    return { ok: false, status: 401, message: 'Invalid webhook token' };
-  }
-  return { ok: true };
-}
-
 // Override console methods to mask sensitive data
 const originalLog = console.log;
 const originalError = console.error;
@@ -286,9 +256,7 @@ app.get('/api/config/full', (req, res) => {
   const safeConfig = {
     ...config,
     auth: config.auth ? { username: config.auth.username, password: '******' } : null,
-    ai: config.ai ? { ...config.ai, apiKey: config.ai.apiKey ? '******' : '' } : null,
-    telegram: config.telegram ? { ...config.telegram, botToken: config.telegram.botToken ? '******' : '' } : null,
-    webhook: config.webhook ? { ...config.webhook, token: config.webhook.token ? '******' : '' } : null
+    ai: config.ai ? { ...config.ai, apiKey: config.ai.apiKey ? '******' : '' } : null
   };
   res.json(safeConfig);
 });
@@ -306,19 +274,18 @@ app.post('/api/config', (req, res) => {
 // Update all settings
 app.post('/api/settings', (req, res) => {
   try {
-    const { server, ai, auth, autoChat, autoRenew, webhook } = req.body;
+    const { server, ai, auth, autoChat, autoRenew } = req.body;
 
     const updates = {};
-    const currentConfig = configManager.getFullConfig();
     if (server) updates.server = server;
     if (ai) {
       updates.ai = {
-        ...currentConfig.ai,
+        ...configManager.getFullConfig().ai,
         ...ai,
         // Only update apiKey if provided and not masked
         apiKey: ai.apiKey && ai.apiKey !== '******'
           ? ai.apiKey
-          : currentConfig.ai?.apiKey
+          : configManager.getFullConfig().ai?.apiKey
       };
     }
     if (auth && auth.password !== '******') {
@@ -331,15 +298,6 @@ app.post('/api/settings', (req, res) => {
     }
     if (autoChat) updates.autoChat = autoChat;
     if (autoRenew) updates.autoRenew = autoRenew;
-    if (webhook) {
-      updates.webhook = {
-        ...currentConfig.webhook,
-        ...webhook,
-        token: webhook.token && webhook.token !== '******' && webhook.token !== '***'
-          ? webhook.token
-          : currentConfig.webhook?.token || ''
-      };
-    }
 
     configManager.updateConfig(updates);
 
@@ -474,16 +432,15 @@ registerFileRoutes(app, {
 
 registerTelegramRoutes(app, { configManager });
 
+// Serve frontend for all other routes
+app.get('*', (req, res) => {
+  res.sendFile(join(__dirname, '../dist/index.html'));
+});
+
 // Webhook endpoint for auto power-on
 app.post('/api/webhooks/trigger', async (req, res) => {
   try {
-    const authResult = verifyWebhookToken(req);
-    if (!authResult.ok) {
-      console.warn(`[Webhook] Rejected request: ${authResult.message}`);
-      return res.status(authResult.status).json({ success: false, error: authResult.message });
-    }
-
-    const { token, secret, ...body } = req.body || {};
+    const body = req.body;
     // 将整个 body 转为小写字符串以便匹配
     const content = JSON.stringify(body).toLowerCase();
 
@@ -565,11 +522,6 @@ app.post('/api/webhooks/trigger', async (req, res) => {
     });
     res.status(500).json({ error: error.message });
   }
-});
-
-// Serve frontend for all other routes
-app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, '../dist/index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
