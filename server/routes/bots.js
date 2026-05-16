@@ -265,11 +265,9 @@ export function registerBotRoutes(app, {
         bot.modes.follow = false;
         bot.modes.autoAttack = false;
         bot.modes.patrol = false;
-        bot.modes.mining = false;
         bot.modes.antiAfk = false;
         bot.modes.autoEat = false;
         bot.modes.guard = false;
-        bot.modes.fishing = false;
         bot.modes.rateLimit = false;
         bot.modes.humanize = false;
         bot.modes.safeIdle = false;

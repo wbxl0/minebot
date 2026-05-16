@@ -449,158 +449,6 @@ export class PatrolBehavior {
 }
 
 /**
- * 挖矿行为
- */
-export class MiningBehavior {
-  constructor(bot, logFn = null, onAutoStop = null) {
-    this.bot = bot;
-    this.log = logFn;
-    this.onAutoStop = onAutoStop;
-    this.active = false;
-    this.targetBlocks = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore'];
-    this.interval = null;
-    this.range = 32;
-    this.stopOnFull = true;
-    this.minEmptySlots = 1;
-    this.lastTargetBlock = null;
-  }
-
-  start(blockTypes = null, options = {}) {
-    if (blockTypes && !Array.isArray(blockTypes) && typeof blockTypes === 'object') {
-      options = blockTypes;
-      blockTypes = null;
-    }
-
-    if (Array.isArray(blockTypes) && blockTypes.length > 0) {
-      this.targetBlocks = blockTypes;
-    }
-    if (typeof options.stopOnFull === 'boolean') {
-      this.stopOnFull = options.stopOnFull;
-    }
-    if (typeof options.minEmptySlots === 'number') {
-      this.minEmptySlots = options.minEmptySlots;
-    }
-    this.active = true;
-    this.mineLoop();
-    return { success: true, message: `开始挖矿 (目标: ${this.targetBlocks.join(', ')})` };
-  }
-
-  async mineLoop() {
-    while (this.active && this.bot) {
-      try {
-        if (this.stopOnFull && !this.hasFreeSlots()) {
-          this.autoStop('inventory_full');
-          break;
-        }
-        const block = this.findOre();
-        if (block) {
-          await this.mineBlock(block);
-          await new Promise(r => setTimeout(r, 400));
-        } else {
-          // 没找到矿，等待后重试
-          await new Promise(r => setTimeout(r, 5000));
-        }
-      } catch (e) {
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-  }
-
-  findOre() {
-    if (!this.bot) return null;
-
-    for (const blockName of this.targetBlocks) {
-      const blockId = this.bot.registry.blocksByName[blockName]?.id;
-      if (!blockId) continue;
-
-      const block = this.bot.findBlock({
-        matching: blockId,
-        maxDistance: this.range
-      });
-
-      if (block) return block;
-    }
-    return null;
-  }
-
-  async mineBlock(block) {
-    if (!this.bot || !block) return;
-
-    try {
-      this.lastTargetBlock = block.name || 'unknown';
-      // 走到矿石附近
-      await this.bot.pathfinder.goto(
-        new (await import('mineflayer-pathfinder')).goals.GoalNear(
-          block.position.x,
-          block.position.y,
-          block.position.z,
-          2
-        )
-      );
-
-      // 看向并挖掘
-      await this.bot.lookAt(block.position);
-      await this.bot.dig(block);
-    } catch (e) {
-      // 挖掘失败，继续下一个
-    }
-  }
-
-  stop() {
-    this.active = false;
-    this.lastTargetBlock = null;
-    if (this.bot) {
-      this.bot.stopDigging();
-    }
-    return { success: true, message: '停止挖矿' };
-  }
-
-  autoStop(reason = 'unknown') {
-    this.active = false;
-    this.lastTargetBlock = null;
-    if (this.bot) {
-      this.bot.stopDigging();
-    }
-    if (this.log && reason === 'inventory_full') {
-      this.log('warning', '背包已满，自动停止挖矿', '🎒');
-    }
-    if (this.onAutoStop) {
-      this.onAutoStop('mining', reason);
-    }
-  }
-
-  hasFreeSlots() {
-    return this.getFreeSlots() >= this.minEmptySlots;
-  }
-
-  getFreeSlots() {
-    const inv = this.bot?.inventory;
-    if (!inv) return 0;
-    if (typeof inv.emptySlotCount === 'function') {
-      return inv.emptySlotCount();
-    }
-    if (typeof inv.emptySlotCount === 'number') {
-      return inv.emptySlotCount;
-    }
-    if (Array.isArray(inv.slots)) {
-      return inv.slots.filter(slot => !slot).length;
-    }
-    return 0;
-  }
-
-  getStatus() {
-    return {
-      active: this.active,
-      targetBlocks: this.targetBlocks,
-      range: this.range,
-      stopOnFull: this.stopOnFull,
-      minEmptySlots: this.minEmptySlots,
-      lastTargetBlock: this.lastTargetBlock
-    };
-  }
-}
-
-/**
  * AI 视角行为 - 自动看向附近玩家
  */
 export class AiViewBehavior {
@@ -1029,100 +877,6 @@ export class GuardBehavior {
 }
 
 /**
- * 自动钓鱼行为
- */
-export class FishingBehavior {
-  constructor(bot, logFn = null, onAutoStop = null) {
-    this.bot = bot;
-    this.log = logFn;
-    this.onAutoStop = onAutoStop;
-    this.active = false;
-    this.intervalSeconds = 2;
-    this.timeoutSeconds = 25;
-    this.fishing = false;
-    this.lastResult = null;
-  }
-
-  start(options = {}) {
-    if (this.active) return { success: false, message: '自动钓鱼已在运行' };
-
-    if (Number.isFinite(options.intervalSeconds)) {
-      this.intervalSeconds = Math.max(1, options.intervalSeconds);
-    }
-    if (Number.isFinite(options.timeoutSeconds)) {
-      this.timeoutSeconds = Math.max(5, options.timeoutSeconds);
-    }
-
-    this.active = true;
-    this.loop();
-    return { success: true, message: '自动钓鱼已开启' };
-  }
-
-  async loop() {
-    while (this.active && this.bot) {
-      if (this.fishing) {
-        await new Promise(r => setTimeout(r, 300));
-        continue;
-      }
-
-      const rod = (this.bot.inventory?.items?.() || []).find(item => item.name === 'fishing_rod');
-      if (!rod) {
-        this.lastResult = '没有钓鱼竿';
-        if (this.log) this.log('warning', '自动钓鱼失败: 未找到钓鱼竿', '🎣');
-        this.autoStop('no_rod');
-        break;
-      }
-
-      if (typeof this.bot.fish !== 'function') {
-        this.lastResult = '不支持钓鱼';
-        if (this.log) this.log('warning', '当前版本不支持自动钓鱼', '🎣');
-        this.autoStop('unsupported');
-        break;
-      }
-
-      this.fishing = true;
-      try {
-        await this.bot.equip(rod, 'hand');
-        await Promise.race([
-          this.bot.fish(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), this.timeoutSeconds * 1000))
-        ]);
-        this.lastResult = '钓鱼成功';
-      } catch (e) {
-        this.lastResult = e?.message || '钓鱼失败';
-      } finally {
-        this.fishing = false;
-      }
-
-      await new Promise(r => setTimeout(r, this.intervalSeconds * 1000));
-    }
-  }
-
-  autoStop(reason = 'unknown') {
-    this.active = false;
-    if (this.bot) this.bot.deactivateItem();
-    if (this.onAutoStop) {
-      this.onAutoStop('fishing', reason);
-    }
-  }
-
-  stop() {
-    this.active = false;
-    if (this.bot) this.bot.deactivateItem();
-    return { success: true, message: '自动钓鱼已关闭' };
-  }
-
-  getStatus() {
-    return {
-      active: this.active,
-      intervalSeconds: this.intervalSeconds,
-      timeoutSeconds: this.timeoutSeconds,
-      lastResult: this.lastResult
-    };
-  }
-}
-
-/**
  * 消息限速行为 - 限制 bot.chat 频率
  */
 export class RateLimitBehavior {
@@ -1519,7 +1273,7 @@ export class SafeIdleBehavior {
 }
 
 /**
- * 任务脚本 - 挖矿 -> 回收 -> 巡逻 -> 休息
+ * 任务脚本 - 巡逻 -> 休息
  */
 export class WorkflowBehavior {
   constructor(bot, controller, logFn = null) {
@@ -1527,11 +1281,10 @@ export class WorkflowBehavior {
     this.controller = controller;
     this.log = logFn;
     this.active = false;
-    this.steps = ['mining', 'patrol', 'rest'];
+    this.steps = ['patrol', 'rest'];
     this.currentIndex = 0;
     this.patrolSeconds = 120;
     this.restSeconds = 40;
-    this.miningMaxSeconds = 240;
     this.stepTimer = null;
     this.startedAt = 0;
     this.lastReason = null;
@@ -1541,16 +1294,14 @@ export class WorkflowBehavior {
     if (this.active) return { success: false, message: '任务脚本已在运行' };
 
     if (Array.isArray(options.steps) && options.steps.length > 0) {
-      this.steps = options.steps.map(step => String(step));
+      const steps = options.steps.map(step => String(step)).filter(step => step !== 'mining');
+      this.steps = steps.length > 0 ? steps : ['patrol', 'rest'];
     }
     if (Number.isFinite(options.patrolSeconds)) {
       this.patrolSeconds = Math.max(10, options.patrolSeconds);
     }
     if (Number.isFinite(options.restSeconds)) {
       this.restSeconds = Math.max(5, options.restSeconds);
-    }
-    if (Number.isFinite(options.miningMaxSeconds)) {
-      this.miningMaxSeconds = Math.max(30, options.miningMaxSeconds);
     }
 
     this.active = true;
@@ -1567,16 +1318,6 @@ export class WorkflowBehavior {
     this.clearTimer();
 
     switch (step) {
-      case 'mining':
-        {
-          const result = this.controller.startMining?.();
-          if (result && result.success === false) {
-            this.completeStep('failed');
-            return;
-          }
-        }
-        this.stepTimer = setTimeout(() => this.completeStep('timeout'), this.miningMaxSeconds * 1000);
-        break;
       case 'patrol':
         {
           const result = this.controller.startPatrol?.();
@@ -1599,7 +1340,6 @@ export class WorkflowBehavior {
     if (!this.active) return;
     const step = this.steps[this.currentIndex] || 'rest';
     this.lastReason = `${step}:${reason}`;
-    if (step === 'mining') this.controller.stopMining?.();
     if (step === 'patrol') this.controller.stopPatrol?.();
     if (step === 'rest') this.controller.stopAllMovement?.();
     this.currentIndex = (this.currentIndex + 1) % this.steps.length;
@@ -1615,7 +1355,6 @@ export class WorkflowBehavior {
   stop() {
     this.active = false;
     this.clearTimer();
-    this.controller.stopMining?.();
     this.controller.stopPatrol?.();
     this.controller.stopAllMovement?.();
     return { success: true, message: '任务脚本已关闭' };
@@ -1777,13 +1516,11 @@ export class BehaviorManager {
     this.follow = new FollowBehavior(bot, goals, logFn, onAutoStop);
     this.attack = new AttackBehavior(bot, goals, logFn, onAutoStop);
     this.patrol = new PatrolBehavior(bot, goals, logFn); // 传递日志函数
-    this.mining = new MiningBehavior(bot, logFn, onAutoStop);
     this.action = new ActionBehavior(bot);
     this.aiView = new AiViewBehavior(bot);
     this.antiAfk = new AntiAfkBehavior(bot, logFn);
     this.autoEat = new AutoEatBehavior(bot, logFn, onAutoStop);
     this.guard = new GuardBehavior(bot, goals, logFn, onAutoStop);
-    this.fishing = new FishingBehavior(bot, logFn, onAutoStop);
     this.rateLimit = new RateLimitBehavior(bot, logFn);
     this.humanize = new HumanizeBehavior(bot, logFn);
     this.safeIdle = new SafeIdleBehavior(bot, logFn);
@@ -1794,13 +1531,11 @@ export class BehaviorManager {
     this.follow.stop();
     this.attack.stop();
     this.patrol.stop();
-    this.mining.stop();
     this.action.stopLoop();
     this.aiView.stop();
     this.antiAfk.stop();
     this.autoEat.stop();
     this.guard.stop();
-    this.fishing.stop();
     this.rateLimit.stop();
     this.humanize.stop();
     this.safeIdle.stop();
@@ -1813,13 +1548,11 @@ export class BehaviorManager {
       follow: this.follow.getStatus(),
       attack: this.attack.getStatus(),
       patrol: this.patrol.getStatus(),
-      mining: this.mining.getStatus(),
       action: this.action.getStatus(),
       aiView: this.aiView.getStatus(),
       antiAfk: this.antiAfk.getStatus(),
       autoEat: this.autoEat.getStatus(),
       guard: this.guard.getStatus(),
-      fishing: this.fishing.getStatus(),
       rateLimit: this.rateLimit.getStatus(),
       humanize: this.humanize.getStatus(),
       safeIdle: this.safeIdle.getStatus(),

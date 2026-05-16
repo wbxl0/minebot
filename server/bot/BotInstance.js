@@ -49,6 +49,8 @@ export class BotInstance {
     this.lastWaterRescueLogAt = 0;
     this.lastWaterEscapeGoalAt = 0;
     this.waterRescueActive = false;
+    this.waterRescueStartedAt = 0;
+    this.lastWaterSpawnRescueAt = 0;
     this.destroyed = false;
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
@@ -93,18 +95,19 @@ export class BotInstance {
       autoChat: config.autoChat?.enabled || false,
       autoAttack: false,
       follow: false,
-      mining: false,
       invincible: false,  // 无敌模式
       antiAfk: false,
       autoEat: false,
       guard: false,
-      fishing: false,
       rateLimit: false,
       humanize: false,
       safeIdle: false,
+      playerLike: false,
       workflow: false
     };
     this.modes = { ...defaultModes, ...(config.modes || {}) };
+    delete this.modes.mining;
+    delete this.modes.fishing;
 
     this.behaviorSettings = {
       attack: {
@@ -134,11 +137,6 @@ export class BotInstance {
         pathCooldownMs: 800,
         ...(config.behaviorSettings?.guard || {})
       },
-      fishing: {
-        intervalSeconds: 2,
-        timeoutSeconds: 25,
-        ...(config.behaviorSettings?.fishing || {})
-      },
       rateLimit: {
         globalCooldownSeconds: 1,
         maxPerMinute: 20,
@@ -162,11 +160,16 @@ export class BotInstance {
         ...(config.behaviorSettings?.safeIdle || {})
       },
       workflow: {
-        steps: ['mining', 'patrol', 'rest'],
-        patrolSeconds: 120,
-        restSeconds: 40,
-        miningMaxSeconds: 240,
-        ...(config.behaviorSettings?.workflow || {})
+        ...(config.behaviorSettings?.workflow || {}),
+        steps: (() => {
+          const steps = Array.isArray(config.behaviorSettings?.workflow?.steps)
+            ? config.behaviorSettings.workflow.steps.filter(step => step !== 'mining')
+            : ['patrol', 'rest'];
+          return steps.length > 0 ? steps : ['patrol', 'rest'];
+        })(),
+        patrolSeconds: config.behaviorSettings?.workflow?.patrolSeconds ?? 120,
+        restSeconds: config.behaviorSettings?.workflow?.restSeconds ?? 40,
+        miningMaxSeconds: undefined
       },
       pathSafety: {
         avoidWater: true,
@@ -175,6 +178,10 @@ export class BotInstance {
         maxDropDown: 2,
         allowSprinting: false,
         allowParkour: false,
+        waterSpawnRescueEnabled: false,
+        waterSpawnRescueCommand: '/spawn',
+        waterSpawnRescueDelaySeconds: 8,
+        waterSpawnRescueCooldownSeconds: 60,
         ...(config.behaviorSettings?.pathSafety || {})
       }
     };
@@ -220,7 +227,6 @@ export class BotInstance {
       '!attack': this.cmdAttack.bind(this),
       '!patrol': this.cmdPatrol.bind(this),
       '!god': this.cmdGod.bind(this),
-      '!mine': this.cmdMine.bind(this),
       '!jump': this.cmdJump.bind(this),
       '!sneak': this.cmdSneak.bind(this)
     };
@@ -611,6 +617,7 @@ export class BotInstance {
 
     if (!this.isBotInWater()) {
       if (this.waterRescueActive) this.stopWaterRescueControls();
+      this.waterRescueStartedAt = 0;
       return;
     }
 
@@ -619,12 +626,25 @@ export class BotInstance {
 
     if (!this.waterRescueActive) {
       this.waterRescueActive = true;
+      this.waterRescueStartedAt = now;
       this.lastWaterEscapeGoalAt = 0;
     }
 
     if (now - this.lastWaterRescueLogAt > WATER_RESCUE_LOG_INTERVAL_MS) {
       this.lastWaterRescueLogAt = now;
       this.log('warning', '检测到机器人在水中，执行防溺水自救', '🌊');
+    }
+
+    const safety = this.behaviorSettings?.pathSafety || {};
+    if (safety.waterSpawnRescueEnabled) {
+      const delayMs = Math.max(1, Number(safety.waterSpawnRescueDelaySeconds) || 8) * 1000;
+      const cooldownMs = Math.max(5, Number(safety.waterSpawnRescueCooldownSeconds) || 60) * 1000;
+      const command = String(safety.waterSpawnRescueCommand || '/spawn').trim() || '/spawn';
+      if (this.waterRescueStartedAt && now - this.waterRescueStartedAt >= delayMs && now - this.lastWaterSpawnRescueAt >= cooldownMs) {
+        this.lastWaterSpawnRescueAt = now;
+        this.log('warning', `水中停留过久，尝试发送救援命令 ${command}`, '🛟');
+        this.sendChatCommand(command);
+      }
     }
 
     if (this.bot.pathfinder && now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS) {
@@ -833,11 +853,6 @@ export class BotInstance {
 
           // 初始化行为管理器，传递日志函数以便巡逻等行为输出坐标
           const controller = {
-            startMining: () => {
-              this.stopConflictingModes('mining');
-              return this.behaviors?.mining?.start();
-            },
-            stopMining: () => this.behaviors?.mining?.stop(),
             startPatrol: () => {
               this.stopConflictingModes('patrol');
               const waypoints = this.behaviorSettings.patrol?.waypoints || null;
@@ -1147,16 +1162,6 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.fishing) {
-          const options = this.behaviorSettings.fishing || {};
-          this.behaviors.fishing.start(options);
-          this.log('info', '自动钓鱼已恢复', '🎣');
-        }
-      } catch (e) {
-        this.log('warning', `自动钓鱼恢复失败: ${e.message}`, '⚠️');
-      }
-
-      try {
         if (this.modes.rateLimit) {
           const options = this.behaviorSettings.rateLimit || {};
           this.behaviors.rateLimit.start(options);
@@ -1167,7 +1172,20 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.humanize) {
+        if (this.modes.playerLike) {
+          const result = this.startPlayerLikeBehaviors();
+          if (result.success) {
+            this.log('info', '像玩家模式已恢复', '🧍');
+          } else {
+            this.log('warning', `像玩家模式恢复失败: ${result.message}`, '⚠️');
+          }
+        }
+      } catch (e) {
+        this.log('warning', `像玩家模式恢复失败: ${e.message}`, '⚠️');
+      }
+
+      try {
+        if (!this.modes.playerLike && this.modes.humanize) {
           const options = this.behaviorSettings.humanize || {};
           this.behaviors.humanize.start(options);
           this.log('info', '拟人已恢复', '🧍');
@@ -1177,7 +1195,7 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.safeIdle) {
+        if (!this.modes.playerLike && this.modes.safeIdle) {
           const options = this.behaviorSettings.safeIdle || {};
           this.behaviors.safeIdle.start(options);
           this.log('info', '安全挂机已恢复', '⛺');
@@ -2061,6 +2079,31 @@ export class BotInstance {
     return false;
   }
 
+  startPlayerLikeBehaviors() {
+    if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
+    const humanizeOptions = this.behaviorSettings.humanize || {};
+    const safeIdleOptions = this.behaviorSettings.safeIdle || {};
+    const humanizeResult = this.behaviors.humanize.active
+      ? { success: true, message: '拟人已在运行' }
+      : this.behaviors.humanize.start(humanizeOptions);
+    const safeIdleResult = this.behaviors.safeIdle.active
+      ? { success: true, message: '安全挂机已在运行' }
+      : this.behaviors.safeIdle.start(safeIdleOptions);
+
+    if (!humanizeResult.success && !safeIdleResult.success) {
+      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}` };
+    }
+
+    return { success: true, message: '像玩家模式已开启' };
+  }
+
+  stopPlayerLikeBehaviors() {
+    if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
+    if (this.behaviors.humanize.active) this.behaviors.humanize.stop();
+    if (this.behaviors.safeIdle.active) this.behaviors.safeIdle.stop();
+    return { success: true, message: '像玩家模式已关闭' };
+  }
+
   stopMode(mode) {
     if (!this.behaviors) return;
     switch (mode) {
@@ -2076,17 +2119,9 @@ export class BotInstance {
         this.behaviors.patrol.stop();
         this.modes.patrol = false;
         break;
-      case 'mining':
-        this.behaviors.mining.stop();
-        this.modes.mining = false;
-        break;
       case 'guard':
         this.behaviors.guard.stop();
         this.modes.guard = false;
-        break;
-      case 'fishing':
-        this.behaviors.fishing.stop();
-        this.modes.fishing = false;
         break;
       case 'humanize':
         this.behaviors.humanize.stop();
@@ -2095,6 +2130,10 @@ export class BotInstance {
       case 'safeIdle':
         this.behaviors.safeIdle.stop();
         this.modes.safeIdle = false;
+        break;
+      case 'playerLike':
+        this.stopPlayerLikeBehaviors();
+        this.modes.playerLike = false;
         break;
       case 'workflow':
         this.behaviors.workflow.stop();
@@ -2107,22 +2146,18 @@ export class BotInstance {
 
   stopConflictingModes(target) {
     const conflicts = {
-      follow: ['patrol', 'mining'],
-      patrol: ['follow', 'mining', 'attack'],
-      mining: ['follow', 'patrol', 'attack'],
-      attack: ['patrol', 'mining'],
-      guard: ['follow', 'patrol', 'mining', 'attack', 'fishing'],
-      fishing: ['follow', 'patrol', 'mining', 'attack', 'guard']
+      follow: ['patrol'],
+      patrol: ['follow', 'attack'],
+      attack: ['patrol'],
+      guard: ['follow', 'patrol', 'attack']
     };
 
     const toStop = conflicts[target] || [];
     toStop.forEach(mode => {
       if (mode === 'follow' && this.modes.follow) this.stopMode('follow');
       if (mode === 'patrol' && this.modes.patrol) this.stopMode('patrol');
-      if (mode === 'mining' && this.modes.mining) this.stopMode('mining');
       if (mode === 'attack' && this.modes.autoAttack) this.stopMode('attack');
       if (mode === 'guard' && this.modes.guard) this.stopMode('guard');
-      if (mode === 'fishing' && this.modes.fishing) this.stopMode('fishing');
     });
   }
 
@@ -2130,25 +2165,19 @@ export class BotInstance {
     const messages = {
       follow: { target_lost: '跟随目标已离开，自动停止跟随' },
       attack: { low_health: '生命值过低，自动停止攻击' },
-      mining: { inventory_full: '背包已满，自动停止挖矿' },
       guard: { low_health: '生命值过低，自动停止守护' }
     };
 
     if (behavior === 'follow') this.modes.follow = false;
     if (behavior === 'attack') this.modes.autoAttack = false;
-    if (behavior === 'mining') this.modes.mining = false;
     if (behavior === 'guard') this.modes.guard = false;
-    if (behavior === 'fishing') this.modes.fishing = false;
     if (behavior === 'antiAfk') this.modes.antiAfk = false;
     if (behavior === 'autoEat') this.modes.autoEat = false;
     if (behavior === 'rateLimit') this.modes.rateLimit = false;
     if (behavior === 'humanize') this.modes.humanize = false;
     if (behavior === 'safeIdle') this.modes.safeIdle = false;
+    if (behavior === 'playerLike') this.modes.playerLike = false;
     if (behavior === 'workflow') this.modes.workflow = false;
-
-    if (behavior === 'mining' && this.behaviors?.workflow?.onStepComplete) {
-      this.behaviors.workflow.onStepComplete('mining', reason || 'done');
-    }
 
     const msg = messages[behavior]?.[reason];
     if (msg && this.bot) {
@@ -2164,7 +2193,6 @@ export class BotInstance {
       antiAfk: { ...(this.behaviorSettings.antiAfk || {}) },
       autoEat: { ...(this.behaviorSettings.autoEat || {}) },
       guard: { ...(this.behaviorSettings.guard || {}) },
-      fishing: { ...(this.behaviorSettings.fishing || {}) },
       rateLimit: { ...(this.behaviorSettings.rateLimit || {}) },
       humanize: { ...(this.behaviorSettings.humanize || {}) },
       safeIdle: { ...(this.behaviorSettings.safeIdle || {}) },
@@ -2231,13 +2259,6 @@ export class BotInstance {
       if (!Number.isNaN(pathCooldownMs)) next.guard.pathCooldownMs = Math.max(300, pathCooldownMs);
     }
 
-    if (settings.fishing) {
-      const intervalSeconds = Number(settings.fishing.intervalSeconds);
-      const timeoutSeconds = Number(settings.fishing.timeoutSeconds);
-      if (!Number.isNaN(intervalSeconds)) next.fishing.intervalSeconds = Math.max(1, intervalSeconds);
-      if (!Number.isNaN(timeoutSeconds)) next.fishing.timeoutSeconds = Math.max(5, timeoutSeconds);
-    }
-
     if (settings.rateLimit) {
       const globalCooldownSeconds = Number(settings.rateLimit.globalCooldownSeconds);
       const maxPerMinute = Number(settings.rateLimit.maxPerMinute);
@@ -2274,14 +2295,14 @@ export class BotInstance {
     }
 
     if (settings.workflow) {
-      const steps = Array.isArray(settings.workflow.steps) ? settings.workflow.steps.map(step => String(step)) : null;
+      const steps = Array.isArray(settings.workflow.steps)
+        ? settings.workflow.steps.map(step => String(step)).filter(step => step !== 'mining')
+        : null;
       const patrolSeconds = Number(settings.workflow.patrolSeconds);
       const restSeconds = Number(settings.workflow.restSeconds);
-      const miningMaxSeconds = Number(settings.workflow.miningMaxSeconds);
       if (steps && steps.length > 0) next.workflow.steps = steps;
       if (!Number.isNaN(patrolSeconds)) next.workflow.patrolSeconds = Math.max(10, patrolSeconds);
       if (!Number.isNaN(restSeconds)) next.workflow.restSeconds = Math.max(5, restSeconds);
-      if (!Number.isNaN(miningMaxSeconds)) next.workflow.miningMaxSeconds = Math.max(30, miningMaxSeconds);
     }
 
     if (settings.pathSafety) {
@@ -2292,6 +2313,15 @@ export class BotInstance {
       if (!Number.isNaN(maxDropDown)) next.pathSafety.maxDropDown = Math.max(0, maxDropDown);
       if (typeof settings.pathSafety.allowSprinting === 'boolean') next.pathSafety.allowSprinting = settings.pathSafety.allowSprinting;
       if (typeof settings.pathSafety.allowParkour === 'boolean') next.pathSafety.allowParkour = settings.pathSafety.allowParkour;
+      if (typeof settings.pathSafety.waterSpawnRescueEnabled === 'boolean') next.pathSafety.waterSpawnRescueEnabled = settings.pathSafety.waterSpawnRescueEnabled;
+      if (settings.pathSafety.waterSpawnRescueCommand !== undefined) {
+        const command = String(settings.pathSafety.waterSpawnRescueCommand).trim();
+        next.pathSafety.waterSpawnRescueCommand = command || '/spawn';
+      }
+      const waterSpawnRescueDelaySeconds = Number(settings.pathSafety.waterSpawnRescueDelaySeconds);
+      const waterSpawnRescueCooldownSeconds = Number(settings.pathSafety.waterSpawnRescueCooldownSeconds);
+      if (!Number.isNaN(waterSpawnRescueDelaySeconds)) next.pathSafety.waterSpawnRescueDelaySeconds = Math.max(1, waterSpawnRescueDelaySeconds);
+      if (!Number.isNaN(waterSpawnRescueCooldownSeconds)) next.pathSafety.waterSpawnRescueCooldownSeconds = Math.max(5, waterSpawnRescueCooldownSeconds);
     }
 
     this.behaviorSettings = next;
@@ -2340,7 +2370,6 @@ export class BotInstance {
       '!attack [hostile/all] - 自动攻击',
       '!patrol - 随机巡逻',
       '!god - 无敌模式',
-      '!mine - 自动挖矿',
       '!jump - 跳跃',
       '!sneak - 蹲下/站起',
       '!ask [问题] - 问AI'
@@ -2391,11 +2420,9 @@ export class BotInstance {
     this.modes.follow = false;
     this.modes.autoAttack = false;
     this.modes.patrol = false;
-    this.modes.mining = false;
     this.modes.antiAfk = false;
     this.modes.autoEat = false;
     this.modes.guard = false;
-    this.modes.fishing = false;
     this.modes.rateLimit = false;
     this.modes.humanize = false;
     this.modes.safeIdle = false;
@@ -2465,22 +2492,6 @@ export class BotInstance {
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
   }
 
-  cmdMine() {
-    if (!this.bot || !this.behaviors) return;
-
-    if (this.modes.mining) {
-      this.behaviors.mining.stop();
-      this.modes.mining = false;
-      this.bot.chat('停止挖矿');
-    } else {
-      this.stopConflictingModes('mining');
-      const result = this.behaviors.mining.start();
-      this.modes.mining = true;
-      this.bot.chat(result.message);
-    }
-    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
-  }
-
   cmdJump() {
     if (!this.bot || !this.behaviors) return;
     this.behaviors.action.jump();
@@ -2546,16 +2557,6 @@ export class BotInstance {
           this.modes.patrol = false;
         }
         break;
-      case 'mining':
-        if (enabled) {
-          this.stopConflictingModes('mining');
-          result = this.behaviors.mining.start(options.blocks, options);
-          this.modes.mining = true;
-        } else {
-          result = this.behaviors.mining.stop();
-          this.modes.mining = false;
-        }
-        break;
       case 'antiAfk':
         if (enabled) {
           const antiAfkOptions = { ...(this.behaviorSettings.antiAfk || {}), ...(options || {}) };
@@ -2587,17 +2588,6 @@ export class BotInstance {
           this.modes.guard = false;
         }
         break;
-      case 'fishing':
-        if (enabled) {
-          this.stopConflictingModes('fishing');
-          const fishingOptions = { ...(this.behaviorSettings.fishing || {}), ...(options || {}) };
-          result = this.behaviors.fishing.start(fishingOptions);
-          this.modes.fishing = result.success;
-        } else {
-          result = this.behaviors.fishing.stop();
-          this.modes.fishing = false;
-        }
-        break;
       case 'rateLimit':
         if (enabled) {
           const rateOptions = { ...(this.behaviorSettings.rateLimit || {}), ...(options || {}) };
@@ -2613,6 +2603,7 @@ export class BotInstance {
           const humanizeOptions = { ...(this.behaviorSettings.humanize || {}), ...(options || {}) };
           result = this.behaviors.humanize.start(humanizeOptions);
           this.modes.humanize = result.success;
+          if (result.success) this.modes.playerLike = false;
         } else {
           result = this.behaviors.humanize.stop();
           this.modes.humanize = false;
@@ -2623,9 +2614,23 @@ export class BotInstance {
           const safeIdleOptions = { ...(this.behaviorSettings.safeIdle || {}), ...(options || {}) };
           result = this.behaviors.safeIdle.start(safeIdleOptions);
           this.modes.safeIdle = result.success;
+          if (result.success) this.modes.playerLike = false;
         } else {
           result = this.behaviors.safeIdle.stop();
           this.modes.safeIdle = false;
+        }
+        break;
+      case 'playerLike':
+        if (enabled) {
+          result = this.startPlayerLikeBehaviors();
+          this.modes.playerLike = result.success;
+          if (result.success) {
+            this.modes.humanize = false;
+            this.modes.safeIdle = false;
+          }
+        } else {
+          result = this.stopPlayerLikeBehaviors();
+          this.modes.playerLike = false;
         }
         break;
       case 'workflow':

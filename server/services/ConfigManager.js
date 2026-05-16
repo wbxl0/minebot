@@ -226,10 +226,10 @@ export class ConfigManager {
         antiAfk: false,
         autoEat: false,
         guard: false,
-        fishing: false,
         rateLimit: false,
         humanize: false,
         safeIdle: false,
+        playerLike: false,
         workflow: false
       },
       proxyNodes: [] // 全局代理节点库
@@ -407,10 +407,10 @@ export class ConfigManager {
         antiAfk: false,
         autoEat: false,
         guard: false,
-        fishing: false,
         rateLimit: false,
         humanize: false,
         safeIdle: false,
+        playerLike: false,
         workflow: false
       },
       // 独立的自动喊话配置
@@ -481,10 +481,6 @@ export class ConfigManager {
           minHealth: 12,
           pathCooldownMs: 800
         },
-        fishing: {
-          intervalSeconds: 2,
-          timeoutSeconds: 25
-        },
         rateLimit: {
           globalCooldownSeconds: 1,
           maxPerMinute: 20
@@ -505,10 +501,9 @@ export class ConfigManager {
           resumeDelaySeconds: 10
         },
         workflow: {
-          steps: ['mining', 'patrol', 'rest'],
+          steps: ['patrol', 'rest'],
           patrolSeconds: 120,
-          restSeconds: 40,
-          miningMaxSeconds: 240
+          restSeconds: 40
         },
         pathSafety: {
           avoidWater: true,
@@ -516,7 +511,11 @@ export class ConfigManager {
           avoidEdges: true,
           maxDropDown: 2,
           allowSprinting: false,
-          allowParkour: false
+          allowParkour: false,
+          waterSpawnRescueEnabled: false,
+          waterSpawnRescueCommand: '/spawn',
+          waterSpawnRescueDelaySeconds: 8,
+          waterSpawnRescueCooldownSeconds: 60
         }
       }
     };

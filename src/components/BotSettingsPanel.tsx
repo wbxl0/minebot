@@ -81,14 +81,6 @@ interface BehaviorStatus {
         nextWaypointIndex?: number | null;
         centerPos?: { x: number; y: number; z: number } | null;
     };
-    mining?: {
-        active: boolean;
-        targetBlocks?: string[];
-        range?: number;
-        stopOnFull?: boolean;
-        minEmptySlots?: number;
-        lastTargetBlock?: string | null;
-    };
     action?: {
         looping?: boolean;
         actionsCount?: number;
@@ -116,12 +108,6 @@ interface BehaviorStatus {
         attackRange?: number;
         minHealth?: number;
         lastTarget?: string | null;
-    };
-    fishing?: {
-        active: boolean;
-        intervalSeconds?: number;
-        timeoutSeconds?: number;
-        lastResult?: string | null;
     };
     rateLimit?: {
         active: boolean;
@@ -203,8 +189,6 @@ export function BotSettingsPanel({
     const [guardRadius, setGuardRadius] = useState<string>("8");
     const [guardAttackRange, setGuardAttackRange] = useState<string>("3");
     const [guardMinHealth, setGuardMinHealth] = useState<string>("12");
-    const [fishingInterval, setFishingInterval] = useState<string>("2");
-    const [fishingTimeout, setFishingTimeout] = useState<string>("25");
     const [rateLimitCooldown, setRateLimitCooldown] = useState<string>("1");
     const [rateLimitMaxPerMinute, setRateLimitMaxPerMinute] = useState<string>("20");
     const [humanizeInterval, setHumanizeInterval] = useState<string>("18");
@@ -218,16 +202,19 @@ export function BotSettingsPanel({
     const [safeIdleActionChance, setSafeIdleActionChance] = useState<string>("0.5");
     const [safeIdleTimeout, setSafeIdleTimeout] = useState<string>("45");
     const [safeIdleResumeDelay, setSafeIdleResumeDelay] = useState<string>("10");
-    const [workflowStepsText, setWorkflowStepsText] = useState<string>("mining, patrol, rest");
+    const [workflowStepsText, setWorkflowStepsText] = useState<string>("patrol, rest");
     const [workflowPatrolSeconds, setWorkflowPatrolSeconds] = useState<string>("120");
     const [workflowRestSeconds, setWorkflowRestSeconds] = useState<string>("40");
-    const [workflowMiningMaxSeconds, setWorkflowMiningMaxSeconds] = useState<string>("240");
     const [pathAvoidWater, setPathAvoidWater] = useState<boolean>(true);
     const [pathAvoidLava, setPathAvoidLava] = useState<boolean>(true);
     const [pathAvoidEdges, setPathAvoidEdges] = useState<boolean>(true);
     const [pathMaxDropDown, setPathMaxDropDown] = useState<string>("2");
     const [pathAllowSprinting, setPathAllowSprinting] = useState<boolean>(false);
     const [pathAllowParkour, setPathAllowParkour] = useState<boolean>(false);
+    const [waterSpawnRescueEnabled, setWaterSpawnRescueEnabled] = useState<boolean>(false);
+    const [waterSpawnRescueCommand, setWaterSpawnRescueCommand] = useState<string>("/spawn");
+    const [waterSpawnRescueDelaySeconds, setWaterSpawnRescueDelaySeconds] = useState<string>("8");
+    const [waterSpawnRescueCooldownSeconds, setWaterSpawnRescueCooldownSeconds] = useState<string>("60");
     const [commandAllowAll, setCommandAllowAll] = useState<boolean>(false);
     const [commandCooldownSeconds, setCommandCooldownSeconds] = useState<string>("3");
     const [commandWhitelistText, setCommandWhitelistText] = useState<string>("");
@@ -358,16 +345,6 @@ export function BotSettingsPanel({
                         ? String(settings.guard.minHealth)
                         : "12"
                 );
-                setFishingInterval(
-                    settings.fishing?.intervalSeconds !== undefined
-                        ? String(settings.fishing.intervalSeconds)
-                        : "2"
-                );
-                setFishingTimeout(
-                    settings.fishing?.timeoutSeconds !== undefined
-                        ? String(settings.fishing.timeoutSeconds)
-                        : "25"
-                );
                 setRateLimitCooldown(
                     settings.rateLimit?.globalCooldownSeconds !== undefined
                         ? String(settings.rateLimit.globalCooldownSeconds)
@@ -435,8 +412,8 @@ export function BotSettingsPanel({
                 );
                 setWorkflowStepsText(
                     settings.workflow?.steps && settings.workflow.steps.length > 0
-                        ? settings.workflow.steps.join(", ")
-                        : "mining, patrol, rest"
+                        ? settings.workflow.steps.filter(step => step !== "mining").join(", ") || "patrol, rest"
+                        : "patrol, rest"
                 );
                 setWorkflowPatrolSeconds(
                     settings.workflow?.patrolSeconds !== undefined
@@ -448,11 +425,6 @@ export function BotSettingsPanel({
                         ? String(settings.workflow.restSeconds)
                         : "40"
                 );
-                setWorkflowMiningMaxSeconds(
-                    settings.workflow?.miningMaxSeconds !== undefined
-                        ? String(settings.workflow.miningMaxSeconds)
-                        : "240"
-                );
                 setPathAvoidWater(settings.pathSafety?.avoidWater !== false);
                 setPathAvoidLava(settings.pathSafety?.avoidLava !== false);
                 setPathAvoidEdges(settings.pathSafety?.avoidEdges !== false);
@@ -463,6 +435,18 @@ export function BotSettingsPanel({
                 );
                 setPathAllowSprinting(!!settings.pathSafety?.allowSprinting);
                 setPathAllowParkour(!!settings.pathSafety?.allowParkour);
+                setWaterSpawnRescueEnabled(!!settings.pathSafety?.waterSpawnRescueEnabled);
+                setWaterSpawnRescueCommand(settings.pathSafety?.waterSpawnRescueCommand || "/spawn");
+                setWaterSpawnRescueDelaySeconds(
+                    settings.pathSafety?.waterSpawnRescueDelaySeconds !== undefined
+                        ? String(settings.pathSafety.waterSpawnRescueDelaySeconds)
+                        : "8"
+                );
+                setWaterSpawnRescueCooldownSeconds(
+                    settings.pathSafety?.waterSpawnRescueCooldownSeconds !== undefined
+                        ? String(settings.pathSafety.waterSpawnRescueCooldownSeconds)
+                        : "60"
+                );
                 const cmdSettings = result.config.commandSettings || {};
                 setCommandAllowAll(!!cmdSettings.allowAll);
                 setCommandCooldownSeconds(
@@ -771,8 +755,6 @@ export function BotSettingsPanel({
             const guardRadiusValue = Number(guardRadius);
             const guardAttackRangeValue = Number(guardAttackRange);
             const guardMinHealthValue = Number(guardMinHealth);
-            const fishingIntervalValue = Number(fishingInterval);
-            const fishingTimeoutValue = Number(fishingTimeout);
             const rateLimitCooldownValue = Number(rateLimitCooldown);
             const rateLimitMaxPerMinuteValue = Number(rateLimitMaxPerMinute);
             const humanizeIntervalValue = Number(humanizeInterval);
@@ -788,8 +770,9 @@ export function BotSettingsPanel({
             const safeIdleResumeDelayValue = Number(safeIdleResumeDelay);
             const workflowPatrolSecondsValue = Number(workflowPatrolSeconds);
             const workflowRestSecondsValue = Number(workflowRestSeconds);
-            const workflowMiningMaxSecondsValue = Number(workflowMiningMaxSeconds);
             const pathMaxDropDownValue = Number(pathMaxDropDown);
+            const waterSpawnRescueDelaySecondsValue = Number(waterSpawnRescueDelaySeconds);
+            const waterSpawnRescueCooldownSecondsValue = Number(waterSpawnRescueCooldownSeconds);
             const workflowSteps = workflowStepsText
                 .split(/[,\n]/)
                 .map(step => step.trim())
@@ -816,10 +799,6 @@ export function BotSettingsPanel({
                     attackRange: Number.isNaN(guardAttackRangeValue) ? 3 : guardAttackRangeValue,
                     minHealth: Number.isNaN(guardMinHealthValue) ? 12 : guardMinHealthValue
                 },
-                fishing: {
-                    intervalSeconds: Number.isNaN(fishingIntervalValue) ? 2 : fishingIntervalValue,
-                    timeoutSeconds: Number.isNaN(fishingTimeoutValue) ? 25 : fishingTimeoutValue
-                },
                 rateLimit: {
                     globalCooldownSeconds: Number.isNaN(rateLimitCooldownValue) ? 1 : rateLimitCooldownValue,
                     maxPerMinute: Number.isNaN(rateLimitMaxPerMinuteValue) ? 20 : rateLimitMaxPerMinuteValue
@@ -840,10 +819,9 @@ export function BotSettingsPanel({
                     resumeDelaySeconds: Number.isNaN(safeIdleResumeDelayValue) ? 10 : safeIdleResumeDelayValue
                 },
                 workflow: {
-                    steps: workflowSteps.length > 0 ? workflowSteps : ["mining", "patrol", "rest"],
+                    steps: workflowSteps.filter(step => step !== "mining").length > 0 ? workflowSteps.filter(step => step !== "mining") : ["patrol", "rest"],
                     patrolSeconds: Number.isNaN(workflowPatrolSecondsValue) ? 120 : workflowPatrolSecondsValue,
-                    restSeconds: Number.isNaN(workflowRestSecondsValue) ? 40 : workflowRestSecondsValue,
-                    miningMaxSeconds: Number.isNaN(workflowMiningMaxSecondsValue) ? 240 : workflowMiningMaxSecondsValue
+                    restSeconds: Number.isNaN(workflowRestSecondsValue) ? 40 : workflowRestSecondsValue
                 },
                 pathSafety: {
                     avoidWater: pathAvoidWater,
@@ -851,7 +829,11 @@ export function BotSettingsPanel({
                     avoidEdges: pathAvoidEdges,
                     maxDropDown: Number.isNaN(pathMaxDropDownValue) ? 2 : pathMaxDropDownValue,
                     allowSprinting: pathAllowSprinting,
-                    allowParkour: pathAllowParkour
+                    allowParkour: pathAllowParkour,
+                    waterSpawnRescueEnabled,
+                    waterSpawnRescueCommand: waterSpawnRescueCommand.trim() || "/spawn",
+                    waterSpawnRescueDelaySeconds: Number.isNaN(waterSpawnRescueDelaySecondsValue) ? 8 : waterSpawnRescueDelaySecondsValue,
+                    waterSpawnRescueCooldownSeconds: Number.isNaN(waterSpawnRescueCooldownSecondsValue) ? 60 : waterSpawnRescueCooldownSecondsValue
                 }
             });
 
@@ -899,11 +881,6 @@ export function BotSettingsPanel({
     const formatValue = (value: string | number | null | undefined, fallback = "无") => {
         if (value === null || value === undefined || value === "") return fallback;
         return String(value);
-    };
-
-    const formatList = (items?: string[]) => {
-        if (!items || items.length === 0) return "无";
-        return items.join(", ");
     };
 
     const resolvedAgentList = agentId && !agentList.some(agent => agent.agentId === agentId)
@@ -1132,14 +1109,11 @@ security:
                             <div>攻击: {behaviorStatus.attack?.active ? `模式 ${formatValue(behaviorStatus.attack.mode)} | 范围 ${formatValue(behaviorStatus.attack.range)} | 血线 ${formatValue(behaviorStatus.attack.minHealth)} | 白名单 ${formatValue(behaviorStatus.attack.whitelistCount)} | 目标 ${formatValue(behaviorStatus.attack.lastTarget)}` : "未开启"}</div>
                             <div>巡逻: {behaviorStatus.patrol?.active ? `移动中 ${behaviorStatus.patrol.isMoving ? "是" : "否"} | 半径 ${formatValue(behaviorStatus.patrol.radius)} | 路径点 ${formatValue(behaviorStatus.patrol.waypointsCount)} | 下一个 ${formatValue(behaviorStatus.patrol.nextWaypointIndex)}` : "未开启"}</div>
                             <div>巡逻中心: {formatPos(behaviorStatus.patrol?.centerPos)}</div>
-                            <div>挖矿: {behaviorStatus.mining?.active ? `范围 ${formatValue(behaviorStatus.mining.range)} | 停满 ${behaviorStatus.mining.stopOnFull ? "是" : "否"} | 空位 ${formatValue(behaviorStatus.mining.minEmptySlots)} | 目标 ${formatValue(behaviorStatus.mining.lastTargetBlock)}` : "未开启"}</div>
-                            <div>挖矿目标: {formatList(behaviorStatus.mining?.targetBlocks)}</div>
                             <div>AI视角: {behaviorStatus.aiView?.active ? `范围 ${formatValue(behaviorStatus.aiView.range)} | 目标 ${formatValue(behaviorStatus.aiView.lastTarget)}` : "未开启"}</div>
                             <div>动作: {behaviorStatus.action?.looping ? `循环中 | 动作数 ${formatValue(behaviorStatus.action.actionsCount)}` : "未开启"}</div>
                             <div>防踢: {behaviorStatus.antiAfk?.active ? `间隔 ${formatValue(behaviorStatus.antiAfk.intervalSeconds)}s | 抖动 ${formatValue(behaviorStatus.antiAfk.jitterSeconds)}s | 动作 ${formatValue(behaviorStatus.antiAfk.lastAction)}` : "未开启"}</div>
                             <div>自动吃: {behaviorStatus.autoEat?.active ? `血线 ${formatValue(behaviorStatus.autoEat.minHealth)} | 饥饿 ${formatValue(behaviorStatus.autoEat.minFood)} | 食物 ${formatValue(behaviorStatus.autoEat.lastFood)}` : "未开启"}</div>
                             <div>守护: {behaviorStatus.guard?.active ? `半径 ${formatValue(behaviorStatus.guard.radius)} | 攻击距 ${formatValue(behaviorStatus.guard.attackRange)} | 血线 ${formatValue(behaviorStatus.guard.minHealth)} | 目标 ${formatValue(behaviorStatus.guard.lastTarget)}` : "未开启"}</div>
-                            <div>钓鱼: {behaviorStatus.fishing?.active ? `间隔 ${formatValue(behaviorStatus.fishing.intervalSeconds)}s | 超时 ${formatValue(behaviorStatus.fishing.timeoutSeconds)}s | 状态 ${formatValue(behaviorStatus.fishing.lastResult)}` : "未开启"}</div>
                             <div>限速: {behaviorStatus.rateLimit?.active ? `冷却 ${formatValue(behaviorStatus.rateLimit.globalCooldownSeconds)}s | 每分钟 ${formatValue(behaviorStatus.rateLimit.maxPerMinute)} | 拦截 ${formatValue(behaviorStatus.rateLimit.blockedCount)}` : "未开启"}</div>
                             <div>拟人: {behaviorStatus.humanize?.active ? `间隔 ${formatValue(behaviorStatus.humanize.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.humanize.lookRange)} | 概率 ${formatValue(behaviorStatus.humanize.actionChance)} | 动作 ${formatValue(behaviorStatus.humanize.lastAction)}` : "未开启"}</div>
                             <div>安全挂机: {behaviorStatus.safeIdle?.active ? `间隔 ${formatValue(behaviorStatus.safeIdle.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.safeIdle.lookRange)} | 超时 ${formatValue(behaviorStatus.safeIdle.timeoutSeconds)}s | 动作 ${formatValue(behaviorStatus.safeIdle.lastAction)}` : "未开启"}</div>
@@ -1252,26 +1226,6 @@ security:
                         value={guardMinHealth}
                         onChange={(e) => setGuardMinHealth(e.target.value)}
                         placeholder="12"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>钓鱼间隔 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="1"
-                        value={fishingInterval}
-                        onChange={(e) => setFishingInterval(e.target.value)}
-                        placeholder="2"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>钓鱼超时 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="5"
-                        value={fishingTimeout}
-                        onChange={(e) => setFishingTimeout(e.target.value)}
-                        placeholder="25"
                     />
                 </div>
                 <div className="space-y-2">
@@ -1409,10 +1363,10 @@ security:
                     <Input
                         value={workflowStepsText}
                         onChange={(e) => setWorkflowStepsText(e.target.value)}
-                        placeholder="mining, patrol, rest"
+                        placeholder="patrol, rest"
                     />
                     <p className="text-xs text-muted-foreground">
-                        可选：mining、patrol、rest
+                        可选：patrol、rest
                     </p>
                 </div>
                 <div className="space-y-2">
@@ -1433,16 +1387,6 @@ security:
                         value={workflowRestSeconds}
                         onChange={(e) => setWorkflowRestSeconds(e.target.value)}
                         placeholder="40"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>挖矿最大时长 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="30"
-                        value={workflowMiningMaxSeconds}
-                        onChange={(e) => setWorkflowMiningMaxSeconds(e.target.value)}
-                        placeholder="240"
                     />
                 </div>
                 <div className="rounded-md border p-3 space-y-3">
@@ -1476,6 +1420,45 @@ security:
                     <div className="flex items-center justify-between">
                         <Label>允许跑酷跳跃</Label>
                         <Switch checked={pathAllowParkour} onCheckedChange={setPathAllowParkour} />
+                    </div>
+                    <div className="border-t pt-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div className="space-y-1">
+                                <Label>水中自动发送救援命令</Label>
+                                <p className="text-xs text-muted-foreground">需要服务器支持该命令；默认关闭，避免误触发。</p>
+                            </div>
+                            <Switch checked={waterSpawnRescueEnabled} onCheckedChange={setWaterSpawnRescueEnabled} />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>救援命令</Label>
+                            <Input
+                                value={waterSpawnRescueCommand}
+                                onChange={(e) => setWaterSpawnRescueCommand(e.target.value)}
+                                placeholder="/spawn"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-2">
+                                <Label>触发延迟 (秒)</Label>
+                                <Input
+                                    type="number"
+                                    min="1"
+                                    value={waterSpawnRescueDelaySeconds}
+                                    onChange={(e) => setWaterSpawnRescueDelaySeconds(e.target.value)}
+                                    placeholder="8"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>冷却时间 (秒)</Label>
+                                <Input
+                                    type="number"
+                                    min="5"
+                                    value={waterSpawnRescueCooldownSeconds}
+                                    onChange={(e) => setWaterSpawnRescueCooldownSeconds(e.target.value)}
+                                    placeholder="60"
+                                />
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <Button

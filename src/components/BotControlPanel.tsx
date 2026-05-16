@@ -3,7 +3,6 @@ import {
   UserPlus,
   Sword,
   Navigation,
-  Pickaxe,
   Square,
   ArrowUp,
   ChevronDown,
@@ -16,7 +15,6 @@ import {
   Shield,
   ShieldCheck,
   Apple,
-  Fish,
   Activity,
   Timer,
   UserRound,
@@ -53,17 +51,16 @@ interface BotControlPanelProps {
     follow?: boolean;
     autoAttack?: boolean;
     patrol?: boolean;
-    mining?: boolean;
     aiView?: boolean;
     autoChat?: boolean;
     invincible?: boolean;
     antiAfk?: boolean;
     autoEat?: boolean;
     guard?: boolean;
-    fishing?: boolean;
     rateLimit?: boolean;
     humanize?: boolean;
     safeIdle?: boolean;
+    playerLike?: boolean;
     workflow?: boolean;
   };
   players?: string[];
@@ -117,14 +114,6 @@ interface BehaviorStatus {
     nextWaypointIndex?: number | null;
     centerPos?: { x: number; y: number; z: number } | null;
   };
-  mining?: {
-    active: boolean;
-    targetBlocks?: string[];
-    range?: number;
-    stopOnFull?: boolean;
-    minEmptySlots?: number;
-    lastTargetBlock?: string | null;
-  };
   action?: {
     looping?: boolean;
     actionsCount?: number;
@@ -152,12 +141,6 @@ interface BehaviorStatus {
     attackRange?: number;
     minHealth?: number;
     lastTarget?: string | null;
-  };
-  fishing?: {
-    active: boolean;
-    intervalSeconds?: number;
-    timeoutSeconds?: number;
-    lastResult?: string | null;
   };
   rateLimit?: {
     active: boolean;
@@ -300,11 +283,6 @@ export function BotControlPanel({
     return String(value);
   };
 
-  const formatList = (items?: string[]) => {
-    if (!items || items.length === 0) return "无";
-    return items.join(", ");
-  };
-
   const formatState = (enabled?: boolean, active?: boolean) => {
     const enabledText = enabled === undefined ? "-" : (enabled ? "开" : "关");
     const activeText = active ? "开" : "关";
@@ -441,6 +419,17 @@ export function BotControlPanel({
               {loading === "autoChat" ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4 mr-1" />}
               <span className="text-xs">喊话</span>
             </Button>
+            <Button
+              size="sm"
+              variant={modes.playerLike ? "default" : "outline"}
+              onClick={() => handleBehavior("playerLike", !modes.playerLike)}
+              disabled={loading !== null}
+              title="像玩家 - 随机视角、蹲下、挥手、短步移动"
+              className={modes.playerLike ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+            >
+              {loading === "playerLike" ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRound className="h-4 w-4 mr-1" />}
+              <span className="text-xs">像玩家</span>
+            </Button>
           </>
         )}
         
@@ -496,16 +485,15 @@ export function BotControlPanel({
             {modes.follow && <Badge variant="secondary">跟随中</Badge>}
             {modes.autoAttack && <Badge variant="destructive">攻击中</Badge>}
             {modes.patrol && <Badge variant="secondary">巡逻中</Badge>}
-            {modes.mining && <Badge variant="secondary">挖矿中</Badge>}
             {modes.aiView && <Badge variant="secondary">AI视角</Badge>}
             {modes.autoChat && <Badge variant="secondary">自动喊话</Badge>}
             {modes.antiAfk && <Badge variant="secondary">防踢</Badge>}
             {modes.autoEat && <Badge variant="secondary">自动吃</Badge>}
             {modes.guard && <Badge variant="secondary">守护</Badge>}
-            {modes.fishing && <Badge variant="secondary">钓鱼</Badge>}
             {modes.rateLimit && <Badge variant="secondary">限速</Badge>}
             {modes.humanize && <Badge variant="secondary">拟人</Badge>}
             {modes.safeIdle && <Badge variant="secondary">安全挂机</Badge>}
+            {modes.playerLike && <Badge className="bg-emerald-600">像玩家</Badge>}
             {modes.workflow && <Badge variant="secondary">任务脚本</Badge>}
             {restartTimer?.enabled && (
               <Badge variant="outline">
@@ -578,15 +566,6 @@ export function BotControlPanel({
                 </Button>
                 <Button
                   size="sm"
-                  variant={modes.mining ? "destructive" : "outline"}
-                  onClick={() => handleBehavior("mining", !modes.mining)}
-                  disabled={loading !== null}
-                  title="挖矿"
-                >
-                  {loading === "mining" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pickaxe className="h-4 w-4" />}
-                </Button>
-                <Button
-                  size="sm"
                   variant="outline"
                   onClick={() => handleAction("jump")}
                   disabled={loading !== null}
@@ -632,15 +611,6 @@ export function BotControlPanel({
                   title="防踢"
                 >
                   {loading === "antiAfk" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-                </Button>
-                <Button
-                  size="sm"
-                  variant={modes.fishing ? "destructive" : "outline"}
-                  onClick={() => handleBehavior("fishing", !modes.fishing)}
-                  disabled={loading !== null}
-                  title="钓鱼"
-                >
-                  {loading === "fishing" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fish className="h-4 w-4" />}
                 </Button>
                 <Button
                   size="sm"
@@ -702,14 +672,11 @@ export function BotControlPanel({
                     <div>攻击: {formatState(modes.autoAttack, behaviorStatus.attack?.active)}{behaviorStatus.attack?.active ? ` | 模式 ${formatValue(behaviorStatus.attack.mode)} | 范围 ${formatValue(behaviorStatus.attack.range)} | 血线 ${formatValue(behaviorStatus.attack.minHealth)} | 白名单 ${formatValue(behaviorStatus.attack.whitelistCount)} | 目标 ${formatValue(behaviorStatus.attack.lastTarget)}` : ""}</div>
                     <div>巡逻: {formatState(modes.patrol, behaviorStatus.patrol?.active)}{behaviorStatus.patrol?.active ? ` | 移动中 ${behaviorStatus.patrol.isMoving ? "是" : "否"} | 半径 ${formatValue(behaviorStatus.patrol.radius)} | 路径点 ${formatValue(behaviorStatus.patrol.waypointsCount)} | 下一个 ${formatValue(behaviorStatus.patrol.nextWaypointIndex)}` : ""}</div>
                     <div>巡逻中心: {formatPos(behaviorStatus.patrol?.centerPos)}</div>
-                    <div>挖矿: {formatState(modes.mining, behaviorStatus.mining?.active)}{behaviorStatus.mining?.active ? ` | 范围 ${formatValue(behaviorStatus.mining.range)} | 停满 ${behaviorStatus.mining.stopOnFull ? "是" : "否"} | 空位 ${formatValue(behaviorStatus.mining.minEmptySlots)} | 目标 ${formatValue(behaviorStatus.mining.lastTargetBlock)}` : ""}</div>
-                    <div>挖矿目标: {formatList(behaviorStatus.mining?.targetBlocks)}</div>
                     <div>AI视角: {formatState(modes.aiView, behaviorStatus.aiView?.active)}{behaviorStatus.aiView?.active ? ` | 范围 ${formatValue(behaviorStatus.aiView.range)} | 目标 ${formatValue(behaviorStatus.aiView.lastTarget)}` : ""}</div>
                     <div>动作: {formatState(undefined, behaviorStatus.action?.looping)}{behaviorStatus.action?.looping ? ` | 循环中 | 动作数 ${formatValue(behaviorStatus.action.actionsCount)}` : ""}</div>
                     <div>防踢: {formatState(modes.antiAfk, behaviorStatus.antiAfk?.active)}{behaviorStatus.antiAfk?.active ? ` | 间隔 ${formatValue(behaviorStatus.antiAfk.intervalSeconds)}s | 抖动 ${formatValue(behaviorStatus.antiAfk.jitterSeconds)}s | 动作 ${formatValue(behaviorStatus.antiAfk.lastAction)}` : ""}</div>
                     <div>自动吃: {formatState(modes.autoEat, behaviorStatus.autoEat?.active)}{behaviorStatus.autoEat?.active ? ` | 血线 ${formatValue(behaviorStatus.autoEat.minHealth)} | 饥饿 ${formatValue(behaviorStatus.autoEat.minFood)} | 食物 ${formatValue(behaviorStatus.autoEat.lastFood)}` : ""}</div>
                     <div>守护: {formatState(modes.guard, behaviorStatus.guard?.active)}{behaviorStatus.guard?.active ? ` | 半径 ${formatValue(behaviorStatus.guard.radius)} | 攻击距 ${formatValue(behaviorStatus.guard.attackRange)} | 血线 ${formatValue(behaviorStatus.guard.minHealth)} | 目标 ${formatValue(behaviorStatus.guard.lastTarget)}` : ""}</div>
-                    <div>钓鱼: {formatState(modes.fishing, behaviorStatus.fishing?.active)}{behaviorStatus.fishing?.active ? ` | 间隔 ${formatValue(behaviorStatus.fishing.intervalSeconds)}s | 超时 ${formatValue(behaviorStatus.fishing.timeoutSeconds)}s | 状态 ${formatValue(behaviorStatus.fishing.lastResult)}` : ""}</div>
                     <div>限速: {formatState(modes.rateLimit, behaviorStatus.rateLimit?.active)}{behaviorStatus.rateLimit?.active ? ` | 冷却 ${formatValue(behaviorStatus.rateLimit.globalCooldownSeconds)}s | 每分钟 ${formatValue(behaviorStatus.rateLimit.maxPerMinute)} | 拦截 ${formatValue(behaviorStatus.rateLimit.blockedCount)}` : ""}</div>
                     <div>拟人: {formatState(modes.humanize, behaviorStatus.humanize?.active)}{behaviorStatus.humanize?.active ? ` | 间隔 ${formatValue(behaviorStatus.humanize.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.humanize.lookRange)} | 概率 ${formatValue(behaviorStatus.humanize.actionChance)}` : ""}</div>
                     <div>安全挂机: {formatState(modes.safeIdle, behaviorStatus.safeIdle?.active)}{behaviorStatus.safeIdle?.active ? ` | 间隔 ${formatValue(behaviorStatus.safeIdle.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.safeIdle.lookRange)} | 超时 ${formatValue(behaviorStatus.safeIdle.timeoutSeconds)}s | 恢复 ${formatValue(behaviorStatus.safeIdle.resumeDelaySeconds)}s | 动作 ${formatValue(behaviorStatus.safeIdle.lastAction)}` : ""}</div>

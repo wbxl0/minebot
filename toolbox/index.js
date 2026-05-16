@@ -2294,54 +2294,6 @@ class PatrolBehavior {
   getStatus() { return { active: this.active, isMoving: this.isMoving, radius: this.radius }; }
 }
 
-class MiningBehavior {
-  constructor(bot) {
-    this.bot = bot;
-    this.active = false;
-    this.targetBlocks = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore'];
-    this.range = 32;
-  }
-  start(blockTypes = null) {
-    if (blockTypes) this.targetBlocks = blockTypes;
-    this.active = true;
-    this.mineLoop();
-    return { success: true, message: _d('5byA5aeL5oyW55+/') };
-  }
-  async mineLoop() {
-    while (this.active && this.bot) {
-      try {
-        const block = this.findOre();
-        if (block) await this.mineBlock(block);
-        else await new Promise(r => setTimeout(r, 5000));
-      } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
-    }
-  }
-  findOre() {
-    if (!this.bot) return null;
-    for (const blockName of this.targetBlocks) {
-      const blockId = this.bot.registry.blocksByName[blockName]?.id;
-      if (!blockId) continue;
-      const block = this.bot.findBlock({ matching: blockId, maxDistance: this.range });
-      if (block) return block;
-    }
-    return null;
-  }
-  async mineBlock(block) {
-    if (!this.bot || !block) return;
-    try {
-      await this.bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2));
-      await this.bot.lookAt(block.position);
-      await this.bot.dig(block);
-    } catch (e) {}
-  }
-  stop() {
-    this.active = false;
-    if (this.bot) this.bot.stopDigging();
-    return { success: true, message: _d('5YGc5q2i5oyW55+/') };
-  }
-  getStatus() { return { active: this.active, targetBlocks: this.targetBlocks, range: this.range }; }
-}
-
 class AiViewBehavior {
   constructor(bot) {
     this.bot = bot;
@@ -2423,7 +2375,6 @@ class BehaviorManager {
     this.follow = new FollowBehavior(bot, goals);
     this.attack = new AttackBehavior(bot, goals);
     this.patrol = new PatrolBehavior(bot, goals, logFn);
-    this.mining = new MiningBehavior(bot);
     this.action = new ActionBehavior(bot);
     this.aiView = new AiViewBehavior(bot);
   }
@@ -2431,7 +2382,6 @@ class BehaviorManager {
     this.follow.stop();
     this.attack.stop();
     this.patrol.stop();
-    this.mining.stop();
     this.aiView.stop();
     return { success: true, message: _d('5bey5YGc5q2i5omA5pyJ6KGM5Li6') };
   }
@@ -2440,7 +2390,6 @@ class BehaviorManager {
       follow: this.follow.getStatus(),
       attack: this.attack.getStatus(),
       patrol: this.patrol.getStatus(),
-      mining: this.mining.getStatus(),
       aiView: this.aiView.getStatus()
     };
   }
@@ -2479,7 +2428,6 @@ class BotInstance {
       autoChat: serverConfig.autoChat?.enabled || false,
       autoAttack: false,
       follow: false,
-      mining: false,
       invincible: false
     };
     if (serverConfig.modes) Object.assign(this.modes, serverConfig.modes);
@@ -2493,7 +2441,6 @@ class BotInstance {
       '!attack': this.cmdAttack.bind(this),
       '!patrol': this.cmdPatrol.bind(this),
       '!god': this.cmdGod.bind(this),
-      '!mine': this.cmdMine.bind(this),
       '!jump': this.cmdJump.bind(this),
       '!sneak': this.cmdSneak.bind(this)
     };
@@ -2845,7 +2792,7 @@ class BotInstance {
 
   cmdHelp() {
     if (!this.bot) return;
-    const helpLines = ['!help - ' + _d('5biu5Yqp'), '!come - ' + _d('6L+H5p2l'), '!follow [' + _d('546p5a62') + '] - ' + _d('6Lef6ZqP'), '!stop - ' + _d('5YGc5q2i5omA5pyJ6KGM5Li6'), '!pos - ' + _d('5L2N572u'), '!attack [hostile/all] - ' + _d('6Ieq5Yqo5pS75Ye7'), '!patrol - ' + _d('6ZqP5py65beh6YC7'), '!god - ' + _d('5peg5pWM5qih5byP'), '!mine - ' + _d('6Ieq5Yqo5oyW55+/'), '!jump - ' + _d('6Lez6LeD'), '!sneak - ' + _d('6Lmy5LiLL+ermeW8gQ==')];
+    const helpLines = ['!help - ' + _d('5biu5Yqp'), '!come - ' + _d('6L+H5p2l'), '!follow [' + _d('546p5a62') + '] - ' + _d('6Lef6ZqP'), '!stop - ' + _d('5YGc5q2i5omA5pyJ6KGM5Li6'), '!pos - ' + _d('5L2N572u'), '!attack [hostile/all] - ' + _d('6Ieq5Yqo5pS75Ye7'), '!patrol - ' + _d('6ZqP5py65beh6YC7'), '!god - ' + _d('5peg5pWM5qih5byP'), '!jump - ' + _d('6Lez6LeD'), '!sneak - ' + _d('6Lmy5LiLL+ermeW8gQ==')];
     helpLines.forEach(line => this.bot.chat(line));
   }
 
@@ -2877,7 +2824,6 @@ class BotInstance {
     this.modes.follow = false;
     this.modes.autoAttack = false;
     this.modes.patrol = false;
-    this.modes.mining = false;
     this.bot.chat(_d('5bey5YGc5q2i5omA5pyJ6KGM5Li6'));
     broadcast('botStatus', this.getStatus());
   }
@@ -2915,13 +2861,6 @@ class BotInstance {
     broadcast('botStatus', this.getStatus());
   }
 
-  cmdMine() {
-    if (!this.bot || !this.behaviors) return;
-    if (this.modes.mining) { this.behaviors.mining.stop(); this.modes.mining = false; this.bot.chat(_d('5YGc5q2i5oyW55+/')); }
-    else { this.behaviors.mining.start(); this.modes.mining = true; this.bot.chat(_d('5byA5aeL5oyW55+/')); }
-    broadcast('botStatus', this.getStatus());
-  }
-
   cmdJump() {
     if (!this.bot || !this.behaviors) return;
     this.behaviors.action.jump();
@@ -2950,10 +2889,6 @@ class BotInstance {
       case 'patrol':
         if (enabled) { result = this.behaviors.patrol.start(); this.modes.patrol = true; }
         else { result = this.behaviors.patrol.stop(); this.modes.patrol = false; }
-        break;
-      case 'mining':
-        if (enabled) { result = this.behaviors.mining.start(options.blocks); this.modes.mining = true; }
-        else { result = this.behaviors.mining.stop(); this.modes.mining = false; }
         break;
       default: result = { success: false, message: _d('5pyq55+l6KGM5Li6') };
     }
@@ -4829,7 +4764,7 @@ const HTML = `<!DOCTYPE html>
                     <div class="server-info-stat"><span>👥</span><span class="server-info-stat-value">\${(b.players||[]).length}</span></div>
                   </div>
                 \` : '<div style="color:var(--danger);font-weight:500">未连接</div>'}
-                \${b.modes ? \`<div class="server-info-modes">\${Object.entries(b.modes).filter(([k,v])=>v).map(([k])=>({aiView:'👁️',patrol:'🚶',autoAttack:'⚔️',invincible:'🛡️',autoChat:'💬',mining:'⛏️'}[k]||'')).join(' ')}</div>\` : ''}
+                \${b.modes ? \`<div class="server-info-modes">\${Object.entries(b.modes).filter(([k,v])=>v).map(([k])=>({aiView:'👁️',patrol:'🚶',autoAttack:'⚔️',invincible:'🛡️',autoChat:'💬'}[k]||'')).join(' ')}</div>\` : ''}
               </div>
               <div class="card-footer">
                 <button class="card-action-btn" onclick="openServerFiles('\${b.id}');event.stopPropagation()">📁 文件</button>
@@ -6474,7 +6409,7 @@ const HTML = `<!DOCTYPE html>
             <div style="display:flex;gap:8px;font-size:11px;margin-bottom:8px;padding:6px 8px;background:var(--bg);border-radius:6px">
               <span>❤️\${selectedBot.health || 0}</span><span>🍖\${selectedBot.food || 0}</span><span>📍\${selectedBot.position ? \`\${selectedBot.position.x},\${selectedBot.position.y},\${selectedBot.position.z}\` : '-'}</span><span>👥\${(selectedBot.players || []).length}</span>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">\${modes.invincible ? '<span style="background:#d97706;color:white;padding:1px 5px;border-radius:6px;font-size:10px">🛡️</span>' : ''}\${modes.follow ? '<span style="background:#6366f1;color:white;padding:1px 5px;border-radius:6px;font-size:10px">👤</span>' : ''}\${modes.autoAttack ? '<span style="background:#ef4444;color:white;padding:1px 5px;border-radius:6px;font-size:10px">⚔️</span>' : ''}\${modes.patrol ? '<span style="background:#8b5cf6;color:white;padding:1px 5px;border-radius:6px;font-size:10px">🚶</span>' : ''}\${modes.mining ? '<span style="background:#f59e0b;color:white;padding:1px 5px;border-radius:6px;font-size:10px">⛏️</span>' : ''}\${modes.aiView ? '<span style="background:#10b981;color:white;padding:1px 5px;border-radius:6px;font-size:10px">👁️</span>' : ''}\${modes.autoChat ? '<span style="background:#3b82f6;color:white;padding:1px 5px;border-radius:6px;font-size:10px">💬</span>' : ''}\${restartTimer.enabled ? '<span style="background:#6b7280;color:white;padding:1px 5px;border-radius:6px;font-size:10px">⏰' + restartTimer.intervalMinutes + 'm</span>' : ''}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">\${modes.invincible ? '<span style="background:#d97706;color:white;padding:1px 5px;border-radius:6px;font-size:10px">🛡️</span>' : ''}\${modes.follow ? '<span style="background:#6366f1;color:white;padding:1px 5px;border-radius:6px;font-size:10px">👤</span>' : ''}\${modes.autoAttack ? '<span style="background:#ef4444;color:white;padding:1px 5px;border-radius:6px;font-size:10px">⚔️</span>' : ''}\${modes.patrol ? '<span style="background:#8b5cf6;color:white;padding:1px 5px;border-radius:6px;font-size:10px">🚶</span>' : ''}\\${modes.aiView ? '<span style="background:#10b981;color:white;padding:1px 5px;border-radius:6px;font-size:10px">👁️</span>' : ''}\${modes.autoChat ? '<span style="background:#3b82f6;color:white;padding:1px 5px;border-radius:6px;font-size:10px">💬</span>' : ''}\${restartTimer.enabled ? '<span style="background:#6b7280;color:white;padding:1px 5px;border-radius:6px;font-size:10px">⏰' + restartTimer.intervalMinutes + 'm</span>' : ''}</div>
             \` : ''}
 
             <div style="background:var(--bg);border-radius:6px;padding:8px">
@@ -6502,9 +6437,6 @@ const HTML = `<!DOCTYPE html>
               </label>
               <label style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:5px;cursor:pointer;font-size:11px">
                 <input type="checkbox" id="mode-autoChat" \${modes.autoChat ? 'checked' : ''} onchange="toggleMode('autoChat')">� ${_d('5Zac6K+d')}
-              </label>
-              <label style="display:flex;align-items:center;gap:6px;padding:6px;background:var(--bg);border-radius:5px;cursor:pointer;font-size:11px">
-                <input type="checkbox" id="mode-mining" \${modes.mining ? 'checked' : ''} onchange="toggleMode('mining')">⛏️ ${_d('5oyW55+/')}
               </label>
             </div>
 
@@ -6649,7 +6581,6 @@ const HTML = `<!DOCTYPE html>
         await api('/bots/' + selectedBot.id + '/behavior', 'POST', { behavior: 'follow', enabled: false });
         await api('/bots/' + selectedBot.id + '/behavior', 'POST', { behavior: 'attack', enabled: false });
         await api('/bots/' + selectedBot.id + '/behavior', 'POST', { behavior: 'patrol', enabled: false });
-        await api('/bots/' + selectedBot.id + '/behavior', 'POST', { behavior: 'mining', enabled: false });
         toast('${_d('5bey5YGc5q2i5omA5pyJ6KGM5Li6')}');
         const res = await api('/bots');
         botsData = res;
