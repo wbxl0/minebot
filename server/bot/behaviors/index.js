@@ -626,6 +626,9 @@ export class AutoEatBehavior {
     this.interval = null;
     this.eating = false;
     this.lastFood = null;
+    this.lastNoFoodLogAt = 0;
+    this.lastEatBlockedLogAt = 0;
+    this.lastEatErrorLogAt = 0;
   }
 
   start(options = {}) {
@@ -682,13 +685,23 @@ export class AutoEatBehavior {
 
     const foodItem = this.findBestFood();
     if (!foodItem) {
+      this.logNoFood(health, food);
+      return;
+    }
+    if (health <= this.minHealth && food >= 20 && !['golden_apple', 'enchanted_golden_apple'].includes(foodItem.name)) {
+      this.logEatBlockedByFullFood(health, food, foodItem.name);
       return;
     }
 
     this.eating = true;
+    this.bot.__autoEating = true;
     try {
       if (this.bot?.pathfinder) this.bot.pathfinder.stop();
       if (this.bot?.setControlState) {
+        this.bot.setControlState('forward', false);
+        this.bot.setControlState('back', false);
+        this.bot.setControlState('left', false);
+        this.bot.setControlState('right', false);
         this.bot.setControlState('sprint', false);
         this.bot.setControlState('jump', false);
         this.bot.setControlState('sneak', false);
@@ -704,15 +717,41 @@ export class AutoEatBehavior {
       this.lastFood = foodItem.name;
       if (this.log) this.log('info', `自动进食: ${foodItem.name}`, '🍖');
     } catch (e) {
-      // ignore eat errors
+      this.logEatError(e);
     } finally {
+      this.bot.__autoEating = false;
       this.eating = false;
     }
+  }
+
+  logNoFood(health, food) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastNoFoodLogAt < 10000) return;
+    this.lastNoFoodLogAt = now;
+    this.log('warning', `需要进食但背包没有可用食物，生命 ${health.toFixed(1)}，饱食 ${food}`, '🍖');
+  }
+
+  logEatBlockedByFullFood(health, food, foodName) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastEatBlockedLogAt < 10000) return;
+    this.lastEatBlockedLogAt = now;
+    this.log('warning', `生命值低但饱食度已满，普通食物 ${foodName} 不能直接回血`, '🍖');
+  }
+
+  logEatError(error) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastEatErrorLogAt < 10000) return;
+    this.lastEatErrorLogAt = now;
+    this.log('warning', `自动进食失败: ${error?.message || error}`, '🍖');
   }
 
   stop() {
     this.active = false;
     this.lastFood = null;
+    if (this.bot) this.bot.__autoEating = false;
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
@@ -843,6 +882,11 @@ export class GuardBehavior {
 
   tick() {
     if (!this.active || !this.bot?.entity) return;
+    if (this.bot.__autoEating) {
+      this.clearCombatControls();
+      if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+      return;
+    }
     if (this.isBotInWater()) {
       this.lastTarget = null;
       this.clearCombatControls();
@@ -868,7 +912,19 @@ export class GuardBehavior {
     }
     if (lowHealth) {
       this.logLowHealthDefense(this.lastTarget);
-      if (dist <= this.attackRange + 1) this.retreatFromTarget(target);
+      if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+      this.clearCombatControls();
+      try {
+        this.bot.lookAt(target.position.offset(0, target.height * 0.85, 0));
+        if (dist <= this.attackRange + 0.8) {
+          this.bot.attack(target);
+          this.logAttack(this.lastTarget);
+        }
+      } catch (e) {
+        // ignore
+      }
+      if (dist <= this.attackRange + 3) this.retreatFromTarget(target);
+      return;
     }
 
     if (dist > this.attackRange && this.bot?.pathfinder) {
