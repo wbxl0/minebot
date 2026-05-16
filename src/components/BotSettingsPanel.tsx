@@ -1253,7 +1253,7 @@ export function BotSettingsPanel({
                     <div className="flex items-center justify-between">
                         <div>
                             <Label>附近玩家随机打招呼</Label>
-                            <p className="text-xs text-muted-foreground">只在拟人/像玩家模式中触发，自动过滤 / 开头的命令。</p>
+                            <p className="text-xs text-muted-foreground">只在拟人/生存智能模式中触发，自动过滤 / 开头的命令。</p>
                         </div>
                         <Switch checked={humanizeGreetingEnabled} onCheckedChange={setHumanizeGreetingEnabled} />
                     </div>

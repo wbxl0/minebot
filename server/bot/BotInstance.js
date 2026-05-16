@@ -1448,13 +1448,13 @@ export class BotInstance {
         if (this.modes.playerLike) {
           const result = this.startPlayerLikeBehaviors();
           if (result.success) {
-            this.log('info', '像玩家模式已恢复', '🧍');
+            this.log('info', '生存智能已恢复', '🧍');
           } else {
-            this.log('warning', `像玩家模式恢复失败: ${result.message}`, '⚠️');
+            this.log('warning', `生存智能恢复失败: ${result.message}`, '⚠️');
           }
         }
       } catch (e) {
-        this.log('warning', `像玩家模式恢复失败: ${e.message}`, '⚠️');
+        this.log('warning', `生存智能恢复失败: ${e.message}`, '⚠️');
       }
 
       try {
@@ -2377,7 +2377,7 @@ export class BotInstance {
       return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}; ${autoEatResult.message}` };
     }
 
-    return { success: true, message: '像玩家模式已开启，已启用防怪守护和自动进食' };
+    return { success: true, message: '生存智能已开启，已启用防怪守护和自动进食' };
   }
 
   stopPlayerLikeBehaviors() {
@@ -2392,7 +2392,7 @@ export class BotInstance {
       this.behaviors.autoEat.stop();
       this.playerLikeStartedAutoEat = false;
     }
-    return { success: true, message: '像玩家模式已关闭' };
+    return { success: true, message: '生存智能已关闭' };
   }
 
   stopMode(mode) {

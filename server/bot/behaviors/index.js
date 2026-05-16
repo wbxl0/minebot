@@ -1349,6 +1349,7 @@ export class HumanizeBehavior {
 
   tick() {
     if (!this.active || !this.bot?.entity) return;
+    if (this.isSurvivalPriorityActive()) return;
     if (Math.random() > this.actionChance) return;
 
     if (Math.random() < this.stepChance && !this.bot?.pathfinder?.isMoving()) {
@@ -1372,6 +1373,7 @@ export class HumanizeBehavior {
 
   reactToNearbyPlayer() {
     if (!this.active || !this.bot?.entity) return;
+    if (this.isSurvivalPriorityActive()) return;
     const now = Date.now();
     const nearbyPlayers = this.findNearbyPlayers(this.nearbyPlayerRange);
     this.handlePlayersLeaving(nearbyPlayers, now);
@@ -1489,7 +1491,7 @@ export class HumanizeBehavior {
     if (!this.log || !username) return;
     if (now - this.lastLookLogAt < 8000) return;
     this.lastLookLogAt = now;
-    this.log('info', `像玩家观察附近玩家: ${username}，距离 ${distance.toFixed(1)} 格`, '🧍');
+    this.log('info', `生存智能观察附近玩家: ${username}，距离 ${distance.toFixed(1)} 格`, '🧍');
   }
 
   logHumanizeAction(message, now = Date.now()) {
@@ -1504,17 +1506,17 @@ export class HumanizeBehavior {
     if (roll < 0.35) {
       this.bot.swingArm();
       this.lastAction = 'wave_player';
-      this.logHumanizeAction('像玩家对附近玩家挥手');
+      this.logHumanizeAction('生存智能对附近玩家挥手');
     } else if (roll < 0.65) {
       this.doSneak(450, 'sneak_player');
-      this.logHumanizeAction('像玩家对附近玩家蹲下回应');
+      this.logHumanizeAction('生存智能对附近玩家蹲下回应');
     } else if (roll < 0.85) {
       this.doJump();
-      this.logHumanizeAction('像玩家对附近玩家跳跃回应');
+      this.logHumanizeAction('生存智能对附近玩家跳跃回应');
     } else if (!this.bot?.pathfinder?.isMoving?.()) {
       this.doStep();
       this.lastAction = 'step_player';
-      this.logHumanizeAction('像玩家在附近玩家旁边移动');
+      this.logHumanizeAction('生存智能在附近玩家旁边移动');
     }
   }
 
@@ -1592,6 +1594,23 @@ export class HumanizeBehavior {
     return feet?.name === 'water' || feet?.name === 'bubble_column' || head?.name === 'water' || head?.name === 'bubble_column';
   }
 
+  hasNearbyHostile(range = 8) {
+    if (!this.bot?.entity) return false;
+    const origin = this.bot.entity.position;
+    return Object.values(this.bot.entities || {}).some(entity => (
+      entity &&
+      entity !== this.bot.entity &&
+      entity.type === 'hostile' &&
+      entity.position &&
+      origin.distanceTo(entity.position) <= range
+    ));
+  }
+
+  isSurvivalPriorityActive() {
+    const health = typeof this.bot?.health === 'number' ? this.bot.health : 20;
+    return this.isBotInWater() || health <= 12 || this.hasNearbyHostile(8) || !!this.bot?.__autoEating;
+  }
+
   bindHurtReaction() {
     if (!this.bot?.on || this.onEntityHurtBound) return;
     this.onEntityHurtBound = (entity) => this.handleEntityHurt(entity);
@@ -1652,7 +1671,7 @@ export class HumanizeBehavior {
     const now = Date.now();
     if (this.log && now - this.lastApproachLogAt > 7000) {
       this.lastApproachLogAt = now;
-      this.log('info', '像玩家尝试靠近附近玩家', '🧍');
+      this.log('info', '生存智能尝试靠近附近玩家', '🧍');
     }
   }
 
@@ -1855,6 +1874,7 @@ export class SafeIdleBehavior {
     if (!this.active || !this.bot?.entity) return;
 
     this.checkTimeout();
+    if (this.isSurvivalPriorityActive()) return;
 
     if (this.pausedUntil && Date.now() < this.pausedUntil) {
       return;
@@ -1879,6 +1899,21 @@ export class SafeIdleBehavior {
     } else {
       this.doStep();
     }
+  }
+
+  isSurvivalPriorityActive() {
+    if (!this.bot?.entity) return false;
+    const health = typeof this.bot.health === 'number' ? this.bot.health : 20;
+    if (health <= 12 || this.bot.__autoEating) return true;
+    if (this.bot.entity.isInWater) return true;
+    const origin = this.bot.entity.position;
+    return Object.values(this.bot.entities || {}).some(entity => (
+      entity &&
+      entity !== this.bot.entity &&
+      entity.type === 'hostile' &&
+      entity.position &&
+      origin.distanceTo(entity.position) <= 8
+    ));
   }
 
   checkTimeout() {

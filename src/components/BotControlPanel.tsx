@@ -422,11 +422,11 @@ export function BotControlPanel({
               variant={modes.playerLike ? "default" : "outline"}
               onClick={() => handleBehavior("playerLike", !modes.playerLike)}
               disabled={loading !== null}
-              title="像玩家 - 随机视角、蹲下、挥手、短步移动"
+              title="生存智能 - 随机视角、蹲下、挥手、短步移动"
               className={modes.playerLike ? "bg-emerald-600 hover:bg-emerald-700" : ""}
             >
               {loading === "playerLike" ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRound className="h-4 w-4 mr-1" />}
-              <span className="text-xs">像玩家</span>
+              <span className="text-xs">生存智能</span>
             </Button>
           </>
         )}
@@ -491,7 +491,7 @@ export function BotControlPanel({
             {modes.rateLimit && <Badge variant="secondary">限速</Badge>}
             {modes.humanize && <Badge variant="secondary">拟人</Badge>}
             {modes.safeIdle && <Badge variant="secondary">安全挂机</Badge>}
-            {modes.playerLike && <Badge className="bg-emerald-600">像玩家</Badge>}
+            {modes.playerLike && <Badge className="bg-emerald-600">生存智能</Badge>}
             {modes.workflow && <Badge variant="secondary">任务脚本</Badge>}
             {restartTimer?.enabled && (
               <Badge variant="outline">
