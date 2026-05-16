@@ -66,6 +66,8 @@ export class BotInstance {
     this.pendingCommandFeedback = null;
     this.commandFeedbackTimer = null;
     this.playerLikeStartedGuard = false;
+    this.lastDeathDiagnosticsAt = 0;
+    this.lastDeathMessageLogged = null;
     this.recentServerMessages = [];
 
     // 每个机器人独立的日志
@@ -428,21 +430,43 @@ export class BotInstance {
     };
   }
 
-  inferDeathCause(environment, hostiles) {
+  inferCauseFromDeathMessage(deathMessage) {
+    if (!deathMessage) return null;
+    const lower = deathMessage.toLowerCase();
+    const hostileNames = ['witch', 'enderman', 'creeper', 'skeleton', 'stray', 'bogged', 'zombie', 'drowned', 'spider', 'pillager', 'blaze', 'ghast', 'slime', 'phantom'];
+    const hostile = hostileNames.find(name => lower.includes(name));
+    if (hostile) return `服务器死亡消息显示被敌对生物击杀: ${hostile}`;
+    if (lower.includes('drowned')) return '服务器死亡消息显示死于溺水';
+    if (lower.includes('fell') || lower.includes('hit the ground')) return '服务器死亡消息显示死于摔落';
+    if (lower.includes('lava') || lower.includes('burned') || lower.includes('fire')) return '服务器死亡消息显示死于岩浆/燃烧';
+    if (lower.includes('magic')) return '服务器死亡消息显示死于魔法伤害';
+    if (lower.includes('shot')) return '服务器死亡消息显示死于远程射击';
+    if (lower.includes('killed') || lower.includes('slain')) return `服务器死亡消息: ${deathMessage}`;
+    return null;
+  }
+
+  inferDeathCause(environment, hostiles, deathMessage = null) {
+    const messageCause = this.inferCauseFromDeathMessage(deathMessage);
+    if (messageCause) return messageCause;
     if (environment?.inLava) return '可能死于岩浆/燃烧伤害';
-    if (environment?.inWater) return '可能死于溺水或水中无法脱离';
     const nearest = hostiles[0];
     if (nearest) return `可能被附近敌对生物击杀: ${nearest.name} (${nearest.distance.toFixed(1)} 格)`;
+    if (environment?.inWater) return '可能死于溺水或水中无法脱离';
     return '未识别到明确死因，查看服务器死亡消息或坐标环境';
   }
 
   logDeathDiagnostics() {
+    const now = Date.now();
+    if (now - this.lastDeathDiagnosticsAt < 5000) return;
+    this.lastDeathDiagnosticsAt = now;
+
     const environment = this.getDeathEnvironmentInfo();
     const hostiles = this.getNearbyEntitiesForDeath('hostile');
     const players = this.getNearbyEntitiesForDeath('player');
     const deathMessage = this.findRecentDeathMessage();
 
-    if (deathMessage) {
+    if (deathMessage && deathMessage !== this.lastDeathMessageLogged) {
+      this.lastDeathMessageLogged = deathMessage;
       this.log('warning', `死亡消息: ${deathMessage}`, '💀');
     }
     if (environment?.position) {
@@ -456,7 +480,7 @@ export class BotInstance {
     if (players.length > 0) {
       this.log('warning', `死亡附近玩家: ${players.map(entity => `${entity.name}(${entity.distance.toFixed(1)}格)`).join(', ')}`, '🧍');
     }
-    this.log('warning', `死亡诊断: ${this.inferDeathCause(environment, hostiles)}`, '🔎');
+    this.log('warning', `死亡诊断: ${this.inferDeathCause(environment, hostiles, deathMessage)}`, '🔎');
   }
 
   // 清空本机器人的日志
