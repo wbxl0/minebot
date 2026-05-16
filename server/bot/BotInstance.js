@@ -12,6 +12,8 @@ const mcDataCache = new Map();
 const WATER_RESCUE_INTERVAL_MS = 500;
 const WATER_RESCUE_LOG_INTERVAL_MS = 10000;
 const WATER_ESCAPE_GOAL_INTERVAL_MS = 2500;
+const WATER_ESCAPE_SEARCH_RADIUS = 24;
+const WATER_ESCAPE_STUCK_MS = 7000;
 const WATER_BLOCK_NAMES = new Set(['water', 'bubble_column']);
 const DANGEROUS_WATER_RESCUE_BLOCKS = new Set([
   'lava',
@@ -51,6 +53,10 @@ export class BotInstance {
     this.waterRescueActive = false;
     this.waterRescueStartedAt = 0;
     this.lastWaterSpawnRescueAt = 0;
+    this.waterEscapeGoal = null;
+    this.waterRescueLastPosition = null;
+    this.waterRescueLastMovedAt = 0;
+    this.waterRescueOriginalMovements = null;
     this.destroyed = false;
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
@@ -741,6 +747,10 @@ export class BotInstance {
   stopWaterRescueControls() {
     const wasActive = this.waterRescueActive;
     this.waterRescueActive = false;
+    this.waterEscapeGoal = null;
+    this.waterRescueLastPosition = null;
+    this.waterRescueLastMovedAt = 0;
+    this.restoreWaterRescueMovements();
     if (wasActive && this.bot?.pathfinder) {
       this.bot.pathfinder.stop();
     }
@@ -750,36 +760,107 @@ export class BotInstance {
     this.bot.setControlState('left', false);
     this.bot.setControlState('right', false);
     this.bot.setControlState('jump', false);
+    this.bot.setControlState('sneak', false);
     this.bot.setControlState('sprint', false);
+  }
+
+  applyWaterRescueMovements() {
+    if (!this.bot?.pathfinder || !this.bot?.registry) return;
+    if (!this.waterRescueOriginalMovements) {
+      this.waterRescueOriginalMovements = this.movements || null;
+    }
+    const rescueMovements = new Movements(this.bot, this.bot.registry);
+    rescueMovements.canDig = false;
+    this.applyMovementSafety(rescueMovements);
+    rescueMovements.liquidCost = 1;
+    rescueMovements.waterCost = 1;
+    rescueMovements.allowSprinting = true;
+    rescueMovements.allowParkour = false;
+    rescueMovements.maxDropDown = Math.min(rescueMovements.maxDropDown ?? 2, 2);
+    this.bot.pathfinder.setMovements(rescueMovements);
+  }
+
+  restoreWaterRescueMovements() {
+    if (!this.bot?.pathfinder || !this.waterRescueOriginalMovements) return;
+    this.bot.pathfinder.setMovements(this.waterRescueOriginalMovements);
+    this.waterRescueOriginalMovements = null;
+  }
+
+  isWaterEscapeStandable(feetPos) {
+    const feet = this.bot.blockAt(feetPos);
+    const head = this.bot.blockAt(feetPos.offset(0, 1, 0));
+    const below = this.bot.blockAt(feetPos.offset(0, -1, 0));
+    if (!feet || !head || !below) return false;
+    if (this.isWaterBlock(feet) || this.isWaterBlock(head) || this.isWaterBlock(below)) return false;
+    if (this.isUnsafeWaterEscapeBlock(feet) || this.isUnsafeWaterEscapeBlock(head) || this.isUnsafeWaterEscapeBlock(below)) return false;
+    if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') return false;
+    return below.boundingBox !== 'empty';
   }
 
   findWaterEscapeGoal() {
     if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
     const origin = this.bot.entity.position.floored();
+    let best = null;
+    let bestScore = Infinity;
 
-    for (let radius = 1; radius <= 5; radius++) {
+    for (let radius = 1; radius <= WATER_ESCAPE_SEARCH_RADIUS; radius++) {
       for (let dx = -radius; dx <= radius; dx++) {
         for (let dz = -radius; dz <= radius; dz++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
-          for (let dy = 2; dy >= -2; dy--) {
+          for (let dy = 3; dy >= -3; dy--) {
             const feetPos = origin.offset(dx, dy, dz);
-            const feet = this.bot.blockAt(feetPos);
-            const head = this.bot.blockAt(feetPos.offset(0, 1, 0));
-            const below = this.bot.blockAt(feetPos.offset(0, -1, 0));
-
-            if (!feet || !head || !below) continue;
-            if (this.isWaterBlock(feet) || this.isWaterBlock(head) || this.isWaterBlock(below)) continue;
-            if (this.isUnsafeWaterEscapeBlock(feet) || this.isUnsafeWaterEscapeBlock(head) || this.isUnsafeWaterEscapeBlock(below)) continue;
-            if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') continue;
-            if (below.boundingBox === 'empty') continue;
-
-            return new goals.GoalNear(feetPos.x, feetPos.y, feetPos.z, 1);
+            if (!this.isWaterEscapeStandable(feetPos)) continue;
+            const horizontal = Math.sqrt(dx * dx + dz * dz);
+            const verticalPenalty = Math.abs(dy) * 1.5;
+            const score = horizontal + verticalPenalty;
+            if (score >= bestScore) continue;
+            bestScore = score;
+            best = feetPos;
           }
         }
       }
+      if (best && radius >= 8) break;
     }
 
-    return null;
+    if (!best) return null;
+    return {
+      goal: new goals.GoalNear(best.x, best.y, best.z, 1),
+      position: best,
+      distance: this.bot.entity.position.distanceTo(best)
+    };
+  }
+
+  updateWaterRescueStuckState(now) {
+    if (!this.bot?.entity?.position) return;
+    const current = this.bot.entity.position;
+    if (!this.waterRescueLastPosition) {
+      this.waterRescueLastPosition = current.clone();
+      this.waterRescueLastMovedAt = now;
+      return;
+    }
+    if (current.distanceTo(this.waterRescueLastPosition) >= 1.2) {
+      this.waterRescueLastPosition = current.clone();
+      this.waterRescueLastMovedAt = now;
+    }
+  }
+
+  applyWaterRescueControls() {
+    if (!this.bot?.setControlState) return;
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
+    this.bot.setControlState('sneak', false);
+    this.bot.setControlState('sprint', true);
+    this.bot.setControlState('jump', true);
+
+    const target = this.waterEscapeGoal?.position;
+    if (!target || !this.bot.entity?.position) {
+      this.bot.setControlState('forward', false);
+      return;
+    }
+
+    this.bot.lookAt(target.offset(0.5, 1, 0.5));
+    this.bot.setControlState('forward', true);
   }
 
   tickWaterRescue() {
@@ -802,11 +883,17 @@ export class BotInstance {
       this.waterRescueActive = true;
       this.waterRescueStartedAt = now;
       this.lastWaterEscapeGoalAt = 0;
+      this.waterEscapeGoal = null;
+      this.waterRescueLastPosition = this.bot.entity.position.clone();
+      this.waterRescueLastMovedAt = now;
+      this.applyWaterRescueMovements();
     }
+
+    this.updateWaterRescueStuckState(now);
 
     if (now - this.lastWaterRescueLogAt > WATER_RESCUE_LOG_INTERVAL_MS) {
       this.lastWaterRescueLogAt = now;
-      this.log('warning', '检测到机器人在水中，执行防溺水自救', '🌊');
+      this.log('warning', '检测到机器人在水中，正在大范围寻找岸边自救', '🌊');
     }
 
     const safety = this.behaviorSettings?.pathSafety || {};
@@ -821,25 +908,31 @@ export class BotInstance {
       }
     }
 
-    if (this.bot.pathfinder && now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS) {
-      const goal = this.findWaterEscapeGoal();
-      if (goal) {
+    if (this.bot.pathfinder && (!this.waterEscapeGoal || now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS)) {
+      const escape = this.findWaterEscapeGoal();
+      if (escape) {
+        this.waterEscapeGoal = escape;
         this.lastWaterEscapeGoalAt = now;
-        this.bot.pathfinder.setGoal(goal, true);
+        this.bot.pathfinder.setGoal(escape.goal, true);
+        if (now - this.lastWaterRescueLogAt < 1000) {
+          this.log('info', `水中自救目标: X=${escape.position.x} Y=${escape.position.y} Z=${escape.position.z}，距离 ${escape.distance.toFixed(1)} 格`, '🛟');
+        }
       } else {
+        this.waterEscapeGoal = null;
         this.bot.pathfinder.stop();
       }
     }
 
-    if (this.bot.setControlState) {
-      this.bot.setControlState('forward', false);
-      this.bot.setControlState('back', false);
-      this.bot.setControlState('left', false);
-      this.bot.setControlState('right', false);
-      this.bot.setControlState('sneak', false);
-      this.bot.setControlState('sprint', false);
-      this.bot.setControlState('jump', true);
+    if (this.waterRescueLastMovedAt && now - this.waterRescueLastMovedAt > WATER_ESCAPE_STUCK_MS) {
+      this.lastWaterEscapeGoalAt = 0;
+      this.waterEscapeGoal = null;
+      this.waterRescueLastPosition = this.bot.entity.position.clone();
+      this.waterRescueLastMovedAt = now;
+      if (this.bot.pathfinder) this.bot.pathfinder.stop();
+      this.log('warning', '水中自救疑似卡住，重新扫描更远岸边', '🛟');
     }
+
+    this.applyWaterRescueControls();
   }
 
   /**
