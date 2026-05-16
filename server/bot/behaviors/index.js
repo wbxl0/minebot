@@ -794,6 +794,15 @@ export class GuardBehavior {
     return !!entity && entity !== this.bot?.entity && entity.type === 'hostile' && entity.position;
   }
 
+  isBotInWater() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return !!this.bot?.entity?.isInWater;
+    if (this.bot.entity.isInWater) return true;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    return feet?.name === 'water' || feet?.name === 'bubble_column' || head?.name === 'water' || head?.name === 'bubble_column';
+  }
+
   bindHurtTargeting() {
     if (!this.bot?.on || this.onEntityHurtBound) return;
     this.onEntityHurtBound = (entity) => {
@@ -834,6 +843,11 @@ export class GuardBehavior {
 
   tick() {
     if (!this.active || !this.bot?.entity) return;
+    if (this.isBotInWater()) {
+      this.lastTarget = null;
+      this.clearCombatControls();
+      return;
+    }
     const target = this.findTarget();
     if (!target) {
       this.lastTarget = null;
@@ -1483,6 +1497,15 @@ export class HumanizeBehavior {
       .map(message => message.slice(0, 40));
   }
 
+  isBotInWater() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return !!this.bot?.entity?.isInWater;
+    if (this.bot.entity.isInWater) return true;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    return feet?.name === 'water' || feet?.name === 'bubble_column' || head?.name === 'water' || head?.name === 'bubble_column';
+  }
+
   bindHurtReaction() {
     if (!this.bot?.on || this.onEntityHurtBound) return;
     this.onEntityHurtBound = (entity) => this.handleEntityHurt(entity);
@@ -1498,6 +1521,13 @@ export class HumanizeBehavior {
   handleEntityHurt(entity) {
     if (!this.active || entity !== this.bot?.entity) return;
     const now = Date.now();
+    if (this.isBotInWater()) {
+      if (this.log && now - this.lastHurtReactionAt >= 2500) {
+        this.log('warning', '机器人在水中受攻击，优先上岸自救', '🌊');
+      }
+      this.lastHurtReactionAt = now;
+      return;
+    }
     if (now - this.lastHurtReactionAt < 2500) return;
     this.lastHurtReactionAt = now;
 
@@ -1511,7 +1541,7 @@ export class HumanizeBehavior {
     this.doBackStep();
     if (this.log) {
       const targetName = hostile?.name || player?.username || player?.entity?.username || player?.entity?.name || '未知目标';
-      this.log('warning', `像玩家受到攻击，后退并观察: ${targetName}`, '🧍');
+      this.log('warning', `机器人受到攻击，后退并观察: ${targetName}`, '🧍');
     }
 
     if (!hostile && player?.entity && now - this.lastHurtGreetingAt >= this.greetingGlobalCooldownSeconds * 1000) {
