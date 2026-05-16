@@ -180,7 +180,7 @@ function SortableServerCard({
           </Badge>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <div className="min-w-6 rounded-full bg-muted/60 px-2 py-0.5 text-center text-xs font-semibold text-muted-foreground tabular-nums">
+          <div className="min-w-6 rounded-full bg-emerald/15 px-2 py-0.5 text-center text-xs font-semibold text-emerald tabular-nums ring-1 ring-emerald/25">
             {playerCount}
           </div>
           {server.type === "panel" && server.panelServerStats && (
