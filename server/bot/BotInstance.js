@@ -57,6 +57,7 @@ export class BotInstance {
     this.reconnectAttempts = 0; // 重连次数
     this.pendingCommandFeedback = null;
     this.commandFeedbackTimer = null;
+    this.playerLikeStartedGuard = false;
 
     // 每个机器人独立的日志
     this.logs = [];
@@ -2150,24 +2151,34 @@ export class BotInstance {
     if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
     const humanizeOptions = this.behaviorSettings.humanize || {};
     const safeIdleOptions = this.behaviorSettings.safeIdle || {};
+    const guardOptions = this.behaviorSettings.guard || {};
     const humanizeResult = this.behaviors.humanize.active
       ? { success: true, message: '拟人已在运行' }
       : this.behaviors.humanize.start(humanizeOptions);
     const safeIdleResult = this.behaviors.safeIdle.active
       ? { success: true, message: '安全挂机已在运行' }
       : this.behaviors.safeIdle.start(safeIdleOptions);
+    const guardWasActive = this.behaviors.guard.active;
+    const guardResult = guardWasActive
+      ? { success: true, message: '守护已在运行' }
+      : this.behaviors.guard.start(guardOptions);
+    this.playerLikeStartedGuard = !guardWasActive && guardResult.success;
 
-    if (!humanizeResult.success && !safeIdleResult.success) {
-      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}` };
+    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success) {
+      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}` };
     }
 
-    return { success: true, message: '像玩家模式已开启' };
+    return { success: true, message: '像玩家模式已开启，已启用防怪守护' };
   }
 
   stopPlayerLikeBehaviors() {
     if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
     if (this.behaviors.humanize.active) this.behaviors.humanize.stop();
     if (this.behaviors.safeIdle.active) this.behaviors.safeIdle.stop();
+    if (this.playerLikeStartedGuard && this.behaviors.guard.active) {
+      this.behaviors.guard.stop();
+      this.playerLikeStartedGuard = false;
+    }
     return { success: true, message: '像玩家模式已关闭' };
   }
 
