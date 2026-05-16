@@ -504,7 +504,10 @@ export class ConfigManager {
           greetingChance: 0.65,
           greetingGlobalCooldownSeconds: 45,
           greetingPlayerCooldownSeconds: 180,
-          greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀']
+          greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀'],
+          approachGreetingMessages: ['你也来了啊', '你在这啊', '我看看你在干嘛', '这边有人啊', '哈喽', '刚过来看看'],
+          leaveGreetingMessages: ['走了啊', '回头见', '我继续逛逛', '那我先走了', '一会儿见'],
+          hurtGreetingMessages: ['别打我啊', '别别别', '干嘛打我', '我没惹你吧', '停一下停一下']
         },
         safeIdle: {
           intervalSeconds: 20,

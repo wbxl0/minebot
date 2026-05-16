@@ -1006,6 +1006,9 @@ export class HumanizeBehavior {
       '需要帮忙吗',
       '你好呀'
     ];
+    this.approachGreetingMessages = ['你也来了啊', '你在这啊', '我看看你在干嘛', '这边有人啊', '哈喽', '刚过来看看'];
+    this.leaveGreetingMessages = ['走了啊', '回头见', '我继续逛逛', '那我先走了', '一会儿见'];
+    this.hurtGreetingMessages = ['别打我啊', '别别别', '干嘛打我', '我没惹你吧', '停一下停一下'];
     this.timeout = null;
     this.reactionInterval = null;
     this.greetingTimers = new Set();
@@ -1013,9 +1016,15 @@ export class HumanizeBehavior {
     this.lastReactedPlayer = null;
     this.lastInteractionAt = 0;
     this.lastGreetingAt = 0;
+    this.lastLeaveGreetingAt = 0;
+    this.lastHurtGreetingAt = 0;
+    this.lastHurtReactionAt = 0;
     this.playerGreetingTimes = new Map();
+    this.playerLeaveGreetingTimes = new Map();
+    this.nearbyPlayerStates = new Map();
     this.lastPathAt = 0;
     this.pathGoalActive = false;
+    this.onEntityHurtBound = null;
   }
 
   start(options = {}) {
@@ -1079,16 +1088,26 @@ export class HumanizeBehavior {
       this.greetingPlayerCooldownSeconds = Math.max(30, options.greetingPlayerCooldownSeconds);
     }
     if (Array.isArray(options.greetingMessages)) {
-      const messages = options.greetingMessages
-        .map(message => String(message || '').trim())
-        .filter(message => message && !message.startsWith('/'))
-        .map(message => message.slice(0, 40));
+      const messages = this.normalizeChatMessages(options.greetingMessages);
       if (messages.length > 0) this.greetingMessages = messages;
+    }
+    if (Array.isArray(options.approachGreetingMessages)) {
+      const messages = this.normalizeChatMessages(options.approachGreetingMessages);
+      if (messages.length > 0) this.approachGreetingMessages = messages;
+    }
+    if (Array.isArray(options.leaveGreetingMessages)) {
+      const messages = this.normalizeChatMessages(options.leaveGreetingMessages);
+      if (messages.length > 0) this.leaveGreetingMessages = messages;
+    }
+    if (Array.isArray(options.hurtGreetingMessages)) {
+      const messages = this.normalizeChatMessages(options.hurtGreetingMessages);
+      if (messages.length > 0) this.hurtGreetingMessages = messages;
     }
 
     this.active = true;
     this.scheduleNext();
     this.startPlayerReactionLoop();
+    this.bindHurtReaction();
     return { success: true, message: '拟人已开启' };
   }
 
@@ -1135,22 +1154,26 @@ export class HumanizeBehavior {
 
   reactToNearbyPlayer() {
     if (!this.active || !this.bot?.entity) return;
-    const player = this.findNearestPlayer(this.nearbyPlayerRange);
+    const now = Date.now();
+    const nearbyPlayers = this.findNearbyPlayers(this.nearbyPlayerRange);
+    this.handlePlayersLeaving(nearbyPlayers, now);
+
+    const player = nearbyPlayers[0];
     if (!player?.entity) {
       this.lastReactedPlayer = null;
       return;
     }
 
-    const distance = this.bot.entity.position.distanceTo(player.entity.position);
+    const distance = player.distance;
     this.lookAtPlayer(player.entity);
     this.lastReactedPlayer = player.username || player.entity.username || player.entity.name || null;
+    const sceneMessageSent = this.trackNearbyPlayer(player, now);
 
-    const now = Date.now();
     if (now - this.lastInteractionAt > 5000 && Math.random() < this.playerActionChance) {
       this.lastInteractionAt = now;
       this.doPlayerReactionAction();
     }
-    this.tryGreetPlayer(player, now);
+    if (!sceneMessageSent) this.tryGreetPlayer(player, now);
 
     if (distance <= this.approachStopDistance) {
       if (this.pathGoalActive && this.bot?.pathfinder) this.bot.pathfinder.stop();
@@ -1170,8 +1193,11 @@ export class HumanizeBehavior {
   }
 
   findNearestPlayer(range) {
-    let nearest = null;
-    let nearestDistance = range;
+    return this.findNearbyPlayers(range)[0] || null;
+  }
+
+  findNearbyPlayers(range) {
+    const nearby = [];
     const players = Object.values(this.bot.players || {});
 
     for (const player of players) {
@@ -1179,13 +1205,37 @@ export class HumanizeBehavior {
       const username = player.username || player.entity.username || player.entity.name;
       if (username && username === this.bot.username) continue;
       const distance = this.bot.entity.position.distanceTo(player.entity.position);
-      if (distance <= nearestDistance) {
-        nearest = player;
-        nearestDistance = distance;
-      }
+      if (distance <= range) nearby.push({ ...player, distance });
     }
 
-    return nearest;
+    return nearby.sort((a, b) => a.distance - b.distance);
+  }
+
+  trackNearbyPlayer(player, now) {
+    const username = player.username || player.entity.username || player.entity.name;
+    if (!username) return false;
+    const previous = this.nearbyPlayerStates.get(username);
+    this.nearbyPlayerStates.set(username, { lastSeenAt: now, distance: player.distance });
+    if (!previous || previous.distance > this.approachPlayerRange) {
+      return this.trySceneMessage(username, this.approachGreetingMessages, 'approach', now);
+    }
+    return false;
+  }
+
+  handlePlayersLeaving(nearbyPlayers, now) {
+    const currentNames = new Set(
+      nearbyPlayers
+        .map(player => player.username || player.entity?.username || player.entity?.name)
+        .filter(Boolean)
+    );
+
+    for (const [username, state] of this.nearbyPlayerStates.entries()) {
+      if (currentNames.has(username)) continue;
+      this.nearbyPlayerStates.delete(username);
+      if (state.distance <= this.approachPlayerRange && now - state.lastSeenAt <= 15000) {
+        this.tryLeaveMessage(username, now);
+      }
+    }
   }
 
   lookAtPlayer(entity) {
@@ -1220,26 +1270,88 @@ export class HumanizeBehavior {
     if (!firstGreetingForPlayer && now - this.lastGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return;
     if (now - lastPlayerGreetingAt < this.greetingPlayerCooldownSeconds * 1000) return;
 
-    const message = this.pickGreetingMessage();
+    const message = this.pickMessage(this.greetingMessages);
     if (!message) return;
     this.lastGreetingAt = now;
     this.playerGreetingTimes.set(username, now);
+    this.queueChatMessage(message, `向 ${username} 打招呼: ${message}`, 'greet_player');
+  }
+
+  trySceneMessage(username, messages, action, now = Date.now()) {
+    if (!this.greetingEnabled || !this.bot?.chat || !username || username === this.bot.username) return false;
+    if (now - this.lastGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return false;
+    const message = this.pickMessage(messages);
+    if (!message) return false;
+    this.lastGreetingAt = now;
+    this.queueChatMessage(message, `对 ${username} 场景回应: ${message}`, `${action}_message`);
+    return true;
+  }
+
+  tryLeaveMessage(username, now = Date.now()) {
+    if (now - this.lastLeaveGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return false;
+    const lastPlayerGreetingAt = this.playerLeaveGreetingTimes.get(username) || 0;
+    if (now - lastPlayerGreetingAt < this.greetingPlayerCooldownSeconds * 1000) return false;
+    if (!this.trySceneMessage(username, this.leaveGreetingMessages, 'leave', now)) return false;
+    this.lastLeaveGreetingAt = now;
+    this.playerLeaveGreetingTimes.set(username, now);
+    return true;
+  }
+
+  queueChatMessage(message, logMessage, action) {
     const delay = 500 + Math.random() * 1200;
     const timer = setTimeout(() => {
       if (!this.active || !this.bot?.chat) return;
       this.bot.chat(message);
-      this.lastAction = 'greet_player';
-      if (this.log) this.log('chat', `向 ${username} 打招呼: ${message}`, '💬');
+      this.lastAction = action;
+      if (this.log) this.log('chat', logMessage, '💬');
       this.greetingTimers.delete(timer);
     }, delay);
     this.greetingTimers.add(timer);
     timer.unref?.();
   }
 
-  pickGreetingMessage() {
-    const messages = this.greetingMessages.filter(message => message && !message.startsWith('/'));
-    if (messages.length === 0) return null;
-    return messages[Math.floor(Math.random() * messages.length)].slice(0, 40);
+  pickMessage(messages) {
+    const cleanMessages = this.normalizeChatMessages(messages);
+    if (cleanMessages.length === 0) return null;
+    return cleanMessages[Math.floor(Math.random() * cleanMessages.length)];
+  }
+
+  normalizeChatMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return messages
+      .map(message => String(message || '').trim())
+      .filter(message => message && !message.startsWith('/'))
+      .map(message => message.slice(0, 40));
+  }
+
+  bindHurtReaction() {
+    if (!this.bot?.on || this.onEntityHurtBound) return;
+    this.onEntityHurtBound = (entity) => this.handleEntityHurt(entity);
+    this.bot.on('entityHurt', this.onEntityHurtBound);
+  }
+
+  unbindHurtReaction() {
+    if (!this.bot?.removeListener || !this.onEntityHurtBound) return;
+    this.bot.removeListener('entityHurt', this.onEntityHurtBound);
+    this.onEntityHurtBound = null;
+  }
+
+  handleEntityHurt(entity) {
+    if (!this.active || entity !== this.bot?.entity) return;
+    const now = Date.now();
+    if (now - this.lastHurtReactionAt < 2500) return;
+    this.lastHurtReactionAt = now;
+
+    const player = this.findNearestPlayer(this.nearbyPlayerRange);
+    if (player?.entity) this.lookAtPlayer(player.entity);
+    this.doBackStep();
+
+    if (now - this.lastHurtGreetingAt >= this.greetingGlobalCooldownSeconds * 1000) {
+      const username = player?.username || player?.entity?.username || player?.entity?.name || '附近玩家';
+      if (this.trySceneMessage(username, this.hurtGreetingMessages, 'hurt', now)) {
+        this.lastHurtGreetingAt = now;
+      }
+    }
   }
 
   approachPlayer(entity) {
@@ -1309,6 +1421,21 @@ export class HumanizeBehavior {
     timer.unref?.();
   }
 
+  doBackStep() {
+    if (!this.bot?.setControlState || this.bot?.pathfinder?.isMoving?.()) return;
+    this.lastAction = 'hurt_back_step';
+    this.bot.setControlState('sprint', false);
+    this.bot.setControlState('back', true);
+    if (Math.random() < 0.4) this.bot.setControlState('sneak', true);
+    const timer = setTimeout(() => {
+      if (this.bot) {
+        this.bot.setControlState('back', false);
+        this.bot.setControlState('sneak', false);
+      }
+    }, 450 + Math.random() * 450);
+    timer.unref?.();
+  }
+
   shouldJumpUp() {
     if (!this.jumpUpEnabled || !this.bot?.entity || !this.bot.blockAt) return false;
     const yaw = this.bot.entity.yaw || 0;
@@ -1335,6 +1462,8 @@ export class HumanizeBehavior {
       clearInterval(this.reactionInterval);
       this.reactionInterval = null;
     }
+    this.unbindHurtReaction();
+    this.nearbyPlayerStates.clear();
     if (this.pathGoalActive && this.bot?.pathfinder) {
       this.bot.pathfinder.stop();
       this.pathGoalActive = false;
@@ -1367,6 +1496,9 @@ export class HumanizeBehavior {
       greetingGlobalCooldownSeconds: this.greetingGlobalCooldownSeconds,
       greetingPlayerCooldownSeconds: this.greetingPlayerCooldownSeconds,
       greetingMessagesCount: this.greetingMessages.length,
+      approachGreetingMessagesCount: this.approachGreetingMessages.length,
+      leaveGreetingMessagesCount: this.leaveGreetingMessages.length,
+      hurtGreetingMessagesCount: this.hurtGreetingMessages.length,
       lastReactedPlayer: this.lastReactedPlayer,
       lastAction: this.lastAction
     };
