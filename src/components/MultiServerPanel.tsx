@@ -171,12 +171,14 @@ function SortableServerCard({
       <div className="flex items-start justify-between gap-3 pr-8 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${getStatusColor(server)}`} />
-          <Badge
-            variant={server.connected || (server.type === "panel" && server.tcpOnline) ? "default" : "secondary"}
-            className="min-w-6 justify-center px-2 text-xs shrink-0 tabular-nums"
-          >
-            {playerCount}
-          </Badge>
+          {!isPanel && (
+            <Badge
+              variant={server.connected ? "default" : "secondary"}
+              className="min-w-6 justify-center px-2 text-xs shrink-0 tabular-nums"
+            >
+              {playerCount}
+            </Badge>
+          )}
         </div>
         {server.type === "panel" && server.panelServerStats && (
           <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal shrink-0">
