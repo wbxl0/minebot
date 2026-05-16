@@ -473,65 +473,39 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
 
       const token = localStorage.getItem('token');
 
-      if (result.type === 'sftp') {
-        // SFTP 模式：逐个上传到后端
-        for (const [index, file] of uploadFiles.entries()) {
-          setUploadIndex(index + 1);
-          setUploadFileName(file.name);
-          const uploadUrl = `${result.endpoint}?directory=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/octet-stream',
-          };
-          if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-          }
-          await uploadWithProgress(uploadUrl, {
-            method: "POST",
-            headers,
-            body: file,
-          }, (fileProgress) => {
-            setUploadProgress(Math.round(((index + fileProgress / 100) / uploadFiles.length) * 100));
-          });
-        }
-      } else {
-        // 翼龙面板模式：同一次请求上传多个文件
-        if (!result.url) {
-          throw new Error("无法获取上传链接");
-        }
-        const formData = new FormData();
-        uploadFiles.forEach(file => {
-          formData.append("files", file);
-        });
+      if (!result.endpoint) {
+        throw new Error("无法获取上传入口");
+      }
 
-        setUploadIndex(1);
-        setUploadFileName(uploadFiles.length === 1 ? uploadFiles[0].name : `${uploadFiles.length} 个文件`);
-        const uploadUrl = `${result.url}&directory=${encodeURIComponent(currentPath)}`;
+      for (const [index, file] of uploadFiles.entries()) {
+        setUploadIndex(index + 1);
+        setUploadFileName(file.name);
+        const uploadUrl = `${result.endpoint}?directory=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/octet-stream',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
         await uploadWithProgress(uploadUrl, {
           method: "POST",
-          body: formData,
-        }, setUploadProgress);
+          headers,
+          body: file,
+        }, (fileProgress) => {
+          setUploadProgress(Math.round(((index + fileProgress / 100) / uploadFiles.length) * 100));
+        });
       }
 
       toast({ title: "上传成功", description: `已上传 ${fileList.length} 个文件`, variant: "success" });
       loadFiles();
     } catch (error) {
-      // 翼龙面板可能因为 CORS/CSP 问题报错，但上传实际成功
-      // 刷新文件列表检查是否真的失败
       loadFiles();
       const errorMsg = error instanceof Error ? error.message : "未知错误";
-      if (errorMsg === "Failed to fetch") {
-        toast({
-          title: "上传可能成功",
-          description: "请检查文件列表确认",
-          variant: "default",
-        });
-      } else {
-        toast({
-          title: "上传失败",
-          description: errorMsg,
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "上传失败",
+        description: errorMsg === "Failed to fetch" ? "上传请求失败，请检查后端服务或网络连接" : errorMsg,
+        variant: "destructive",
+      });
     } finally {
       setUploading(false);
       setUploadProgress(0);

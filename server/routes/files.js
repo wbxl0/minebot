@@ -1,5 +1,15 @@
 import express from 'express';
 
+const PANEL_UPLOAD_LIMIT = '100mb';
+
+function getPanelUploadErrorMessage(error) {
+  if (error?.response) {
+    const panelError = error.response.data?.errors?.[0];
+    return panelError?.detail || panelError?.title || error.response.statusText || `HTTP ${error.response.status}`;
+  }
+  return error?.message || '未知错误';
+}
+
 export function registerFileRoutes(app, {
   botManager
 }) {
@@ -168,14 +178,63 @@ export function registerFileRoutes(app, {
         });
       } else {
         const result = await bot.getUploadUrl();
-        res.json(result);
+        res.json({
+          ...result,
+          type: 'pterodactyl',
+          endpoint: `/api/bots/${req.params.id}/files/upload-panel`
+        });
       }
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
     }
   });
 
-  app.post('/api/bots/:id/files/upload-sftp', express.raw({ limit: '100mb', type: '*/*' }), async (req, res) => {
+  app.post('/api/bots/:id/files/upload-panel', express.raw({ limit: PANEL_UPLOAD_LIMIT, type: '*/*' }), async (req, res) => {
+    try {
+      const bot = botManager.bots.get(req.params.id);
+      if (!bot) {
+        return res.status(404).json({ success: false, error: 'Bot not found' });
+      }
+      const directory = req.query.directory || '/';
+      const fileName = req.query.name;
+      if (!fileName) {
+        return res.status(400).json({ success: false, error: '缺少 name 参数' });
+      }
+
+      const uploadInfo = await bot.getUploadUrl();
+      if (!uploadInfo.success || !uploadInfo.url) {
+        return res.status(400).json({ success: false, error: uploadInfo.error || '无法获取上传链接' });
+      }
+
+      const formData = new FormData();
+      formData.append('files', new Blob([req.body]), fileName);
+      const separator = uploadInfo.url.includes('?') ? '&' : '?';
+      const uploadUrl = `${uploadInfo.url}${separator}directory=${encodeURIComponent(directory)}`;
+
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        let error = response.statusText || `HTTP ${response.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          error = parsed.errors?.[0]?.detail || parsed.errors?.[0]?.title || parsed.error || error;
+        } catch {
+          if (body) error = body;
+        }
+        return res.status(response.status).json({ success: false, error });
+      }
+
+      res.json({ success: true, message: '文件已上传' });
+    } catch (error) {
+      res.status(400).json({ success: false, error: getPanelUploadErrorMessage(error) });
+    }
+  });
+
+  app.post('/api/bots/:id/files/upload-sftp', express.raw({ limit: PANEL_UPLOAD_LIMIT, type: '*/*' }), async (req, res) => {
     try {
       const bot = botManager.bots.get(req.params.id);
       if (!bot) {
