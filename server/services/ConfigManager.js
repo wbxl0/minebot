@@ -488,16 +488,19 @@ export class ConfigManager {
         humanize: {
           intervalSeconds: 18,
           lookRange: 6,
-          actionChance: 0.6,
-          stepChance: 0.3,
-          sneakChance: 0.2,
-          swingChance: 0.2,
-          nearbyPlayerRange: 8,
-          approachPlayerRange: 7,
+          actionChance: 0.75,
+          stepChance: 0.45,
+          sneakChance: 0.25,
+          swingChance: 0.25,
+          stepDurationMinMs: 450,
+          stepDurationMaxMs: 900,
+          jumpUpEnabled: true,
+          nearbyPlayerRange: 12,
+          approachPlayerRange: 10,
           approachStopDistance: 3,
           playerReactionIntervalSeconds: 2,
-          playerActionChance: 0.65,
-          approachChance: 0.35
+          playerActionChance: 0.75,
+          approachChance: 0.55
         },
         safeIdle: {
           intervalSeconds: 20,

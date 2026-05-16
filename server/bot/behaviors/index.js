@@ -971,16 +971,19 @@ export class HumanizeBehavior {
     this.active = false;
     this.intervalSeconds = 18;
     this.lookRange = 6;
-    this.actionChance = 0.6;
-    this.stepChance = 0.3;
-    this.sneakChance = 0.2;
-    this.swingChance = 0.2;
-    this.nearbyPlayerRange = 8;
-    this.approachPlayerRange = 7;
+    this.actionChance = 0.75;
+    this.stepChance = 0.45;
+    this.sneakChance = 0.25;
+    this.swingChance = 0.25;
+    this.stepDurationMinMs = 450;
+    this.stepDurationMaxMs = 900;
+    this.jumpUpEnabled = true;
+    this.nearbyPlayerRange = 12;
+    this.approachPlayerRange = 10;
     this.approachStopDistance = 3;
     this.playerReactionIntervalSeconds = 2;
-    this.playerActionChance = 0.65;
-    this.approachChance = 0.35;
+    this.playerActionChance = 0.75;
+    this.approachChance = 0.55;
     this.timeout = null;
     this.reactionInterval = null;
     this.lastAction = null;
@@ -1010,6 +1013,15 @@ export class HumanizeBehavior {
     }
     if (Number.isFinite(options.swingChance)) {
       this.swingChance = Math.min(1, Math.max(0, options.swingChance));
+    }
+    if (Number.isFinite(options.stepDurationMinMs)) {
+      this.stepDurationMinMs = Math.max(150, options.stepDurationMinMs);
+    }
+    if (Number.isFinite(options.stepDurationMaxMs)) {
+      this.stepDurationMaxMs = Math.max(this.stepDurationMinMs, options.stepDurationMaxMs);
+    }
+    if (typeof options.jumpUpEnabled === 'boolean') {
+      this.jumpUpEnabled = options.jumpUpEnabled;
     }
     if (Number.isFinite(options.nearbyPlayerRange)) {
       this.nearbyPlayerRange = Math.max(3, options.nearbyPlayerRange);
@@ -1197,20 +1209,42 @@ export class HumanizeBehavior {
   doStep() {
     this.lastAction = 'step';
     this.bot.setControlState('sprint', false);
-    const move = Math.random() > 0.5 ? 'forward' : 'back';
+    const move = Math.random() > 0.35 ? 'forward' : 'back';
     const strafe = Math.random() > 0.5 ? 'left' : 'right';
-    if (Math.random() > 0.5) {
+    if (move === 'forward' && this.shouldJumpUp()) {
+      this.bot.setControlState('jump', true);
+      this.lastAction = 'step_jump_up';
+    }
+    if (Math.random() > 0.35) {
       this.bot.setControlState(move, true);
     } else {
       this.bot.setControlState(strafe, true);
     }
+    const duration = this.stepDurationMinMs + Math.random() * (this.stepDurationMaxMs - this.stepDurationMinMs);
     const timer = setTimeout(() => {
       if (this.bot) {
         this.bot.setControlState(move, false);
         this.bot.setControlState(strafe, false);
+        this.bot.setControlState('jump', false);
       }
-    }, 180 + Math.random() * 220);
+    }, duration);
     timer.unref?.();
+  }
+
+  shouldJumpUp() {
+    if (!this.jumpUpEnabled || !this.bot?.entity || !this.bot.blockAt) return false;
+    const yaw = this.bot.entity.yaw || 0;
+    const dx = -Math.sin(yaw);
+    const dz = -Math.cos(yaw);
+    const pos = this.bot.entity.position;
+    const frontFeet = pos.offset(Math.round(dx), 0, Math.round(dz)).floored();
+    const frontHead = frontFeet.offset(0, 1, 0);
+    const frontAbove = frontFeet.offset(0, 2, 0);
+    const feetBlock = this.bot.blockAt(frontFeet);
+    const headBlock = this.bot.blockAt(frontHead);
+    const aboveBlock = this.bot.blockAt(frontAbove);
+    if (!feetBlock || !headBlock || !aboveBlock) return false;
+    return feetBlock.boundingBox !== 'empty' && headBlock.boundingBox === 'empty' && aboveBlock.boundingBox === 'empty';
   }
 
   stop() {
@@ -1243,6 +1277,9 @@ export class HumanizeBehavior {
       nearbyPlayerRange: this.nearbyPlayerRange,
       approachPlayerRange: this.approachPlayerRange,
       approachStopDistance: this.approachStopDistance,
+      stepDurationMinMs: this.stepDurationMinMs,
+      stepDurationMaxMs: this.stepDurationMaxMs,
+      jumpUpEnabled: this.jumpUpEnabled,
       lastReactedPlayer: this.lastReactedPlayer,
       lastAction: this.lastAction
     };
