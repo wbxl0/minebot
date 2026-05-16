@@ -3,7 +3,7 @@ import { StatusCard } from "./StatusCard";
 import { useWebSocketContext } from "@/contexts/WebSocketContext";
 
 interface StatsStatus {
-    botList?: Array<{ players?: string[] }>;
+    botList?: Array<{ players?: string[]; serverAddress?: string; serverHost?: string | null; serverPort?: number | null }>;
     players?: string[];
     connectedBots?: number;
     totalBots?: number;
@@ -18,9 +18,16 @@ export function StatsOverview({ status, connected }: StatsOverviewProps) {
     const { systemStatus } = useWebSocketContext();
 
     // 计算所有服务器的总玩家数
-    const totalPlayers = status?.botList?.reduce((sum, bot) => {
-        return sum + (bot.players?.length || 0);
-    }, 0) || status?.players?.length || 0;
+    const serverPlayers = new Map<string, Set<string>>();
+    status?.botList?.forEach((bot, index) => {
+        const key = bot.serverAddress || (bot.serverHost ? `${bot.serverHost}:${bot.serverPort || 25565}` : `bot:${index}`);
+        const players = serverPlayers.get(key) || new Set<string>();
+        bot.players?.forEach(player => players.add(player));
+        serverPlayers.set(key, players);
+    });
+    const totalPlayers = serverPlayers.size > 0
+        ? Array.from(serverPlayers.values()).reduce((sum, players) => sum + players.size, 0)
+        : status?.players?.length || 0;
 
     // 内存状态颜色
     const memoryPercent = systemStatus ? parseFloat(systemStatus.percent) : 0;

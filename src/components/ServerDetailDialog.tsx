@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Sheet,
   SheetContent,
@@ -19,13 +19,12 @@ import {
   Terminal,
   Trash,
   Settings,
-  Activity,
   Server,
   FolderOpen,
 } from "lucide-react";
 import { api, BotStatus } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { formatUptime, formatSize } from "@/lib/utils";
+import { formatUptime } from "@/lib/utils";
 import { BotControlPanel } from "./BotControlPanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { FileManager } from "./FileManager";
@@ -56,23 +55,6 @@ export function ServerDetailDialog({
     username: "",
   });
   const [activeTab, setActiveTab] = useState("control");
-  const [agentLoading, setAgentLoading] = useState(false);
-  const [agentStats, setAgentStats] = useState<null | {
-    hostname: string;
-    uptime: number;
-    load1: number;
-    load5: number;
-    load15: number;
-    cpu: number;
-    memTotal: number;
-    memUsed: number;
-    memUsedPct: number;
-    diskTotal: number;
-    diskUsed: number;
-    diskUsedPct: number;
-    netRx: number;
-    netTx: number;
-  }>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const { logs } = useWebSocketContext();
@@ -168,30 +150,9 @@ export function ServerDetailDialog({
     }
   };
 
-  const loadAgentData = useCallback(async () => {
-    if (!server?.agentId) return;
-    setAgentLoading(true);
-    try {
-      const statsResult = await api.getAgentHostStats(server.agentId);
-      setAgentStats(statsResult.data || null);
-    } catch (error) {
-      toast({ title: "错误", description: String(error), variant: "destructive" });
-    } finally {
-      setAgentLoading(false);
-    }
-  }, [server, toast]);
-
-  useEffect(() => {
-    if (activeTab === "agent") {
-      loadAgentData();
-    }
-  }, [activeTab, loadAgentData]);
-
   if (!server) return null;
 
   const isPanel = server.type === "panel";
-
-  const agentConfigured = !!server?.agentStatus?.connected || !!server?.agentStatus?.lastSeen;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -214,11 +175,10 @@ export function ServerDetailDialog({
               )}
             </SheetTitle>
             <div className="flex items-center gap-2">
-              <Badge variant={server.connected || (isPanel && server.tcpOnline) || server.agentStatus?.connected ? "default" : "outline"} className="h-6">
+              <Badge variant={server.connected || (isPanel && server.tcpOnline) ? "default" : "outline"} className="h-6">
                 {server.connected ? "在线" :
                   isPanel && server.tcpOnline ? "TCP在线" :
-                    isPanel && server.panelServerState === "running" ? "运行中" :
-                      server.agentStatus?.connected ? "在线" : "离线"}
+                    isPanel && server.panelServerState === "running" ? "运行中" : "离线"}
               </Badge>
               {!isPanel && (
                 <Button
@@ -259,16 +219,7 @@ export function ServerDetailDialog({
                 <Terminal className="h-4 w-4" />
                 日志
               </TabsTrigger>
-              {agentConfigured && (
-                <TabsTrigger
-                  value="agent"
-                  className="gap-2 px-0 pb-3 rounded-none bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none transition-all"
-                >
-                  <Activity className="h-4 w-4" />
-                  探针
-                </TabsTrigger>
-              )}
-              {(server.pterodactyl?.url || (server.sftp?.host && server.fileAccessType === 'sftp') || agentConfigured) && (
+              {(server.pterodactyl?.url || (server.sftp?.host && server.fileAccessType === 'sftp')) && (
                 <TabsTrigger
                   value="files"
                   className="gap-2 px-0 pb-3 rounded-none bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none transition-all"
@@ -281,7 +232,7 @@ export function ServerDetailDialog({
           </div>
 
           {/* 文件管理 - 完全独立的层，覆盖其他内容 */}
-          {activeTab === 'files' && (server.pterodactyl?.url || (server.sftp?.host && server.fileAccessType === 'sftp') || agentConfigured) && (
+          {activeTab === 'files' && (server.pterodactyl?.url || (server.sftp?.host && server.fileAccessType === 'sftp')) && (
             <div className="flex-1 overflow-y-auto p-6">
               <FileManager
                 serverId={server.id}
@@ -358,7 +309,6 @@ export function ServerDetailDialog({
                 connected={server.connected || false}
                 serverType={server.type || "minecraft"}
                 panelServerState={server.panelServerState}
-                agentOnline={server.agentStatus?.connected || false}
                 modes={server.modes}
                   players={server.players}
                   restartTimer={server.restartTimer}
@@ -526,71 +476,6 @@ export function ServerDetailDialog({
                     )}
                   </div>
                 </div>
-              </TabsContent>
-
-              {/* 探针监控 */}
-              <TabsContent value="agent" className="mt-0 space-y-4 animate-in slide-in-from-bottom-2 duration-300">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-medium">探针监控</h3>
-                    <p className="text-xs text-muted-foreground">节点级别监控</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={loadAgentData} disabled={agentLoading || !server.agentId}>
-                    {agentLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                    刷新
-                  </Button>
-                </div>
-
-                {!server.agentId && (
-                  <div className="rounded-xl border border-border/50 bg-card/50 p-4 text-sm text-muted-foreground">
-                    当前服务器未绑定探针，请先在服务器配置中绑定 agentId。
-                  </div>
-                )}
-
-                {server.agentId && (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">主机</div>
-                      <div className="mt-1 font-mono text-sm">{agentStats?.hostname || "-"}</div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">运行时间</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? formatUptime(agentStats.uptime * 1000) : "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">CPU</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? `${agentStats.cpu.toFixed(1)}%` : "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">内存</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? `${formatSize(agentStats.memUsed)} / ${formatSize(agentStats.memTotal)} (${agentStats.memUsedPct.toFixed(1)}%)` : "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">磁盘</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? `${formatSize(agentStats.diskUsed)} / ${formatSize(agentStats.diskTotal)} (${agentStats.diskUsedPct.toFixed(1)}%)` : "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">负载</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? `${agentStats.load1.toFixed(2)} / ${agentStats.load5.toFixed(2)} / ${agentStats.load15.toFixed(2)}` : "-"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/50 bg-card/50 p-4">
-                      <div className="text-xs text-muted-foreground">网络</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {agentStats ? `${formatSize(agentStats.netRx)} ↓ / ${formatSize(agentStats.netTx)} ↑` : "-"}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </TabsContent>
             </div>
           )}

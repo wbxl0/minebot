@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Folder,
   File,
@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { api, FileInfo } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { formatSize } from "@/lib/utils";
@@ -76,7 +77,7 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [pathHistory, setPathHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [activeChannel, setActiveChannel] = useState<'agent' | 'sftp' | 'pterodactyl' | null>(null);
+  const [activeChannel, setActiveChannel] = useState<'sftp' | 'pterodactyl' | null>(null);
 
   // 对话框状态
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -84,9 +85,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FileInfo | null>(null);
   const [newName, setNewName] = useState("");
-  const [permOpen, setPermOpen] = useState(false);
-  const [permTarget, setPermTarget] = useState<FileInfo | null>(null);
-  const [permMode, setPermMode] = useState("0644");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
@@ -94,8 +92,32 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [originalContent, setOriginalContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadFileName, setUploadFileName] = useState("");
+  const [uploadIndex, setUploadIndex] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const lastLoadErrorRef = useRef("");
 
   const { toast } = useToast();
+
+  const getFileListErrorMessage = (message?: string) => {
+    if (!message) return "无法加载文件列表";
+    if (message.includes("There was an error while communicating with the machine")) {
+      return "翼龙面板无法和 Wings 节点通信，请检查该服务器电源状态、节点状态或稍后重试。";
+    }
+    return message;
+  };
+
+  const showLoadError = (message?: string) => {
+    const description = getFileListErrorMessage(message);
+    if (lastLoadErrorRef.current === description) return;
+    lastLoadErrorRef.current = description;
+    toast({
+      title: "加载失败",
+      description,
+      variant: "destructive",
+    });
+  };
 
   // 加载文件列表
   const loadFiles = useCallback(async (path: string = currentPath) => {
@@ -110,34 +132,25 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
         });
         setFiles(sorted);
         setSelectedFiles(new Set());
+        lastLoadErrorRef.current = "";
         if (result.channel) {
           setActiveChannel(result.channel);
         }
       } else {
-        toast({
-          title: "加载失败",
-          description: result.error || "无法加载文件列表",
-          variant: "destructive",
-        });
+        showLoadError(result.error);
       }
     } catch (error) {
-      toast({
-        title: "加载失败",
-        description: error instanceof Error ? error.message : "未知错误",
-        variant: "destructive",
-      });
+      showLoadError(error instanceof Error ? error.message : "未知错误");
     } finally {
       setLoading(false);
     }
   }, [serverId, currentPath, toast]);
 
-  const channelLabel = activeChannel === 'agent'
-    ? '探针'
-    : activeChannel === 'sftp'
-      ? 'SFTP'
-      : activeChannel === 'pterodactyl'
-        ? '翼龙面板'
-        : null;
+  const channelLabel = activeChannel === 'sftp'
+    ? 'SFTP'
+    : activeChannel === 'pterodactyl'
+      ? '翼龙面板'
+      : null;
 
   useEffect(() => {
     loadFiles();
@@ -305,35 +318,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
     }
   };
 
-  const handleOpenPerms = (file: FileInfo) => {
-    setPermTarget(file);
-    setPermMode(file.mode || "0644");
-    setPermOpen(true);
-  };
-
-  const handleChmod = async () => {
-    if (!permTarget) return;
-    const filePath = currentPath === "/" ? `/${permTarget.name}` : `${currentPath}/${permTarget.name}`;
-    try {
-      const result = await api.chmodFile(serverId, filePath, permMode.trim());
-      if (result.success) {
-        toast({ title: "权限已更新", variant: "success" });
-        loadFiles();
-      } else {
-        toast({ title: "修改失败", description: result.error, variant: "destructive" });
-      }
-    } catch (error) {
-      toast({
-        title: "修改失败",
-        description: error instanceof Error ? error.message : "未知错误",
-        variant: "destructive",
-      });
-    } finally {
-      setPermOpen(false);
-      setPermTarget(null);
-    }
-  };
-
   // 下载文件
   const handleDownload = async (file: FileInfo) => {
     try {
@@ -342,7 +326,7 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
       // 先检查文件访问类型
       const uploadInfo = await api.getUploadUrl(serverId);
 
-        if (uploadInfo.type === 'sftp' || uploadInfo.type === 'agent') {
+        if (uploadInfo.type === 'sftp') {
         // SFTP 模式：直接下载
         const token = localStorage.getItem('token');
         const downloadUrl = `/api/bots/${serverId}/files/download?file=${encodeURIComponent(filePath)}`;
@@ -435,12 +419,51 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
     }
   };
 
+  const uploadWithProgress = (url: string, options: { method: string; headers?: Record<string, string>; body: BodyInit }, onProgress: (percent: number) => void) => new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method, url);
+
+    Object.entries(options.headers || {}).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value);
+    });
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 204) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+
+      try {
+        const errorData = JSON.parse(xhr.responseText || "{}");
+        reject(new Error(errorData.error || `上传失败: ${xhr.statusText || xhr.status}`));
+      } catch {
+        reject(new Error(`上传失败: ${xhr.statusText || xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Failed to fetch"));
+    xhr.send(options.body);
+  });
+
   // 上传文件
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
 
+    const uploadFiles = Array.from(fileList);
     setUploading(true);
+    setUploadProgress(0);
+    setUploadIndex(1);
+    setUploadTotal(uploadFiles.length);
+    setUploadFileName(uploadFiles[0]?.name || "");
+
     try {
       // 获取上传信息
       const result = await api.getUploadUrl(serverId);
@@ -450,71 +473,45 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
 
       const token = localStorage.getItem('token');
 
-      if (result.type === 'sftp' || result.type === 'agent') {
-        // SFTP 模式：逐个上传到后端
-        for (const file of Array.from(fileList)) {
-          const uploadUrl = `${result.endpoint}?directory=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/octet-stream',
-          };
-          if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-          }
-          const response = await fetch(uploadUrl, {
-            method: "POST",
-            headers,
-            body: file,
-          });
+      if (!result.endpoint) {
+        throw new Error("无法获取上传入口");
+      }
 
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `上传失败: ${response.statusText}`);
-          }
+      for (const [index, file] of uploadFiles.entries()) {
+        setUploadIndex(index + 1);
+        setUploadFileName(file.name);
+        const uploadUrl = `${result.endpoint}?directory=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/octet-stream',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
         }
-      } else {
-        // 翼龙面板模式：同一次请求上传多个文件
-        if (!result.url) {
-          throw new Error("无法获取上传链接");
-        }
-        const formData = new FormData();
-        Array.from(fileList).forEach(file => {
-          formData.append("files", file);
-        });
-
-        const uploadUrl = `${result.url}&directory=${encodeURIComponent(currentPath)}`;
-        const response = await fetch(uploadUrl, {
+        await uploadWithProgress(uploadUrl, {
           method: "POST",
-          body: formData,
+          headers,
+          body: file,
+        }, (fileProgress) => {
+          setUploadProgress(Math.round(((index + fileProgress / 100) / uploadFiles.length) * 100));
         });
-
-        // 翼龙面板上传成功返回 204 No Content
-        if (!response.ok && response.status !== 204) {
-          throw new Error(`上传失败: ${response.statusText}`);
-        }
       }
 
       toast({ title: "上传成功", description: `已上传 ${fileList.length} 个文件`, variant: "success" });
       loadFiles();
     } catch (error) {
-      // 翼龙面板可能因为 CORS/CSP 问题报错，但上传实际成功
-      // 刷新文件列表检查是否真的失败
       loadFiles();
       const errorMsg = error instanceof Error ? error.message : "未知错误";
-      if (errorMsg === "Failed to fetch") {
-        toast({
-          title: "上传可能成功",
-          description: "请检查文件列表确认",
-          variant: "default",
-        });
-      } else {
-        toast({
-          title: "上传失败",
-          description: errorMsg,
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "上传失败",
+        description: errorMsg === "Failed to fetch" ? "上传请求失败，请检查后端服务或网络连接" : errorMsg,
+        variant: "destructive",
+      });
     } finally {
       setUploading(false);
+      setUploadProgress(0);
+      setUploadFileName("");
+      setUploadIndex(0);
+      setUploadTotal(0);
       e.target.value = "";
     }
   };
@@ -586,6 +583,18 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   };
 
   const hasChanges = fileContent !== originalContent;
+
+  const uploadProgressView = uploading && (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2" role="status" aria-live="polite">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="truncate">
+          正在上传 {uploadTotal > 1 ? `${uploadIndex}/${uploadTotal} · ` : ""}{uploadFileName}
+        </span>
+        <span className="shrink-0 tabular-nums">{uploadProgress}%</span>
+      </div>
+      <Progress value={uploadProgress} className="h-2" aria-label="上传进度" />
+    </div>
+  );
 
   // compact 模式下的简化渲染
   if (compact) {
@@ -671,6 +680,8 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
             </div>
           </div>
 
+          {uploadProgressView}
+
           {/* 文件列表 */}
           <div className="border rounded-lg overflow-auto max-h-[calc(100vh-280px)]">
             <div className="min-w-[500px]">
@@ -742,12 +753,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                           <DropdownMenuItem onClick={() => handleDownload(file)}>
                             <Download className="h-4 w-4 mr-2" />
                             下载
-                          </DropdownMenuItem>
-                        )}
-                        {file.isFile && activeChannel === 'agent' && (
-                          <DropdownMenuItem onClick={() => handleOpenPerms(file)}>
-                            <Edit3 className="h-4 w-4 mr-2" />
-                            权限
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuItem onClick={() => handleCopy(file)}>
@@ -836,30 +841,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                 取消
               </Button>
               <Button onClick={handleRename} disabled={!newName.trim()}>
-                确定
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={permOpen} onOpenChange={setPermOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>修改权限</DialogTitle>
-              <DialogDescription>
-                {permTarget?.name}
-              </DialogDescription>
-            </DialogHeader>
-            <Input
-              placeholder="0644"
-              value={permMode}
-              onChange={(e) => setPermMode(e.target.value)}
-            />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setPermOpen(false)}>
-                取消
-              </Button>
-              <Button onClick={handleChmod} disabled={!permMode.trim()}>
                 确定
               </Button>
             </DialogFooter>
@@ -1031,6 +1012,8 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
           </div>
         </div>
 
+        {uploadProgressView}
+
         {/* 文件列表 */}
         <div className="flex-1 min-h-0 border rounded-lg overflow-auto">
           <div className="min-w-[500px]">
@@ -1102,12 +1085,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                         <DropdownMenuItem onClick={() => handleDownload(file)}>
                           <Download className="h-4 w-4 mr-2" />
                           下载
-                        </DropdownMenuItem>
-                      )}
-                      {file.isFile && activeChannel === 'agent' && (
-                        <DropdownMenuItem onClick={() => handleOpenPerms(file)}>
-                          <Edit3 className="h-4 w-4 mr-2" />
-                          权限
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem onClick={() => handleCopy(file)}>
@@ -1197,30 +1174,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
               取消
             </Button>
             <Button onClick={handleRename} disabled={!newName.trim()}>
-              确定
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={permOpen} onOpenChange={setPermOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>修改权限</DialogTitle>
-            <DialogDescription>
-              {permTarget?.name}
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            placeholder="0644"
-            value={permMode}
-            onChange={(e) => setPermMode(e.target.value)}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPermOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleChmod} disabled={!permMode.trim()}>
               确定
             </Button>
           </DialogFooter>

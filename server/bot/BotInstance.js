@@ -9,6 +9,22 @@ import { proxyService } from '../services/ProxyService.js';
 
 // 协议数据缓存，内存紧张时清空
 const mcDataCache = new Map();
+const WATER_RESCUE_INTERVAL_MS = 500;
+const WATER_RESCUE_LOG_INTERVAL_MS = 10000;
+const WATER_ESCAPE_GOAL_INTERVAL_MS = 2500;
+const WATER_ESCAPE_SEARCH_RADIUS = 24;
+const WATER_ESCAPE_STUCK_MS = 7000;
+const WATER_ESCAPE_NEAR_GOAL_STUCK_MS = 2500;
+const WATER_BLOCK_NAMES = new Set(['water', 'bubble_column']);
+const DANGEROUS_WATER_RESCUE_BLOCKS = new Set([
+  'lava',
+  'fire',
+  'soul_fire',
+  'magma_block',
+  'cactus',
+  'campfire',
+  'soul_campfire'
+]);
 
 /**
  * Single bot instance for one server connection
@@ -29,13 +45,33 @@ export class BotInstance {
     this.connectionTimeout = null;
     this.reconnectTimeout = null;
     this.activityMonitorInterval = null;
+    this.waterRescueInterval = null;
     this.autoChatInterval = null;
     this.restartCommandTimer = null; // 定时发送 /restart 命令
     this.lastActivity = Date.now();
+    this.lastWaterRescueLogAt = 0;
+    this.lastWaterEscapeGoalAt = 0;
+    this.waterRescueActive = false;
+    this.waterRescueStartedAt = 0;
+    this.lastWaterSpawnRescueAt = 0;
+    this.waterEscapeGoal = null;
+    this.waterRescueLastPosition = null;
+    this.waterRescueLastMovedAt = 0;
+    this.waterRescueNearGoalSince = 0;
+    this.waterRescueOriginalMovements = null;
     this.destroyed = false;
     this.spawnPosition = null; // 记录出生点用于巡逻
     this.hasAutoOpped = false; // 是否已自动给予OP权限
     this.reconnectAttempts = 0; // 重连次数
+    this.pendingCommandFeedback = null;
+    this.commandFeedbackTimer = null;
+    this.playerLikeStartedGuard = false;
+    this.lastDeathDiagnosticsAt = 0;
+    this.lastDeathHandledAt = 0;
+    this.lastRespawnHandledAt = 0;
+    this.respawnRequestTimer = null;
+    this.lastDeathMessageLogged = null;
+    this.recentServerMessages = [];
 
     // 每个机器人独立的日志
     this.logs = [];
@@ -63,8 +99,7 @@ export class BotInstance {
       sftp: config.sftp || null, // SFTP 配置
       fileAccessType: config.fileAccessType || 'pterodactyl', // 文件访问方式: 'pterodactyl' | 'sftp' | 'none'
       autoOp: config.autoOp !== false, // 默认启用自动OP
-      autoReconnect: config.autoReconnect || false, // 对有需要的节点开启持久重连
-      agentId: config.agentId || null
+      autoReconnect: config.autoReconnect || false // 对有需要的节点开启持久重连
     };
 
     // 从配置加载模式设置 (确保所有模式都有默认值)
@@ -74,18 +109,19 @@ export class BotInstance {
       autoChat: config.autoChat?.enabled || false,
       autoAttack: false,
       follow: false,
-      mining: false,
       invincible: false,  // 无敌模式
       antiAfk: false,
       autoEat: false,
       guard: false,
-      fishing: false,
       rateLimit: false,
       humanize: false,
       safeIdle: false,
+      playerLike: false,
       workflow: false
     };
     this.modes = { ...defaultModes, ...(config.modes || {}) };
+    delete this.modes.mining;
+    delete this.modes.fishing;
 
     this.behaviorSettings = {
       attack: {
@@ -115,11 +151,6 @@ export class BotInstance {
         pathCooldownMs: 800,
         ...(config.behaviorSettings?.guard || {})
       },
-      fishing: {
-        intervalSeconds: 2,
-        timeoutSeconds: 25,
-        ...(config.behaviorSettings?.fishing || {})
-      },
       rateLimit: {
         globalCooldownSeconds: 1,
         maxPerMinute: 20,
@@ -128,10 +159,27 @@ export class BotInstance {
       humanize: {
         intervalSeconds: 18,
         lookRange: 6,
-        actionChance: 0.6,
-        stepChance: 0.3,
-        sneakChance: 0.2,
-        swingChance: 0.2,
+        actionChance: 0.75,
+        stepChance: 0.45,
+        sneakChance: 0.25,
+        swingChance: 0.25,
+        stepDurationMinMs: 450,
+        stepDurationMaxMs: 900,
+        jumpUpEnabled: true,
+        nearbyPlayerRange: 12,
+        approachPlayerRange: 10,
+        approachStopDistance: 3,
+        playerReactionIntervalSeconds: 2,
+        playerActionChance: 0.75,
+        approachChance: 0.55,
+        greetingEnabled: true,
+        greetingChance: 0.65,
+        greetingGlobalCooldownSeconds: 45,
+        greetingPlayerCooldownSeconds: 180,
+        greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀'],
+        approachGreetingMessages: ['你也来了啊', '你在这啊', '我看看你在干嘛', '这边有人啊', '哈喽', '刚过来看看'],
+        leaveGreetingMessages: ['走了啊', '回头见', '我继续逛逛', '那我先走了', '一会儿见'],
+        hurtGreetingMessages: ['别打我啊', '别别别', '干嘛打我', '我没惹你吧', '停一下停一下'],
         ...(config.behaviorSettings?.humanize || {})
       },
       safeIdle: {
@@ -143,11 +191,16 @@ export class BotInstance {
         ...(config.behaviorSettings?.safeIdle || {})
       },
       workflow: {
-        steps: ['mining', 'patrol', 'rest'],
-        patrolSeconds: 120,
-        restSeconds: 40,
-        miningMaxSeconds: 240,
-        ...(config.behaviorSettings?.workflow || {})
+        ...(config.behaviorSettings?.workflow || {}),
+        steps: (() => {
+          const steps = Array.isArray(config.behaviorSettings?.workflow?.steps)
+            ? config.behaviorSettings.workflow.steps.filter(step => step !== 'mining')
+            : ['patrol', 'rest'];
+          return steps.length > 0 ? steps : ['patrol', 'rest'];
+        })(),
+        patrolSeconds: config.behaviorSettings?.workflow?.patrolSeconds ?? 120,
+        restSeconds: config.behaviorSettings?.workflow?.restSeconds ?? 40,
+        miningMaxSeconds: undefined
       },
       pathSafety: {
         avoidWater: true,
@@ -156,6 +209,10 @@ export class BotInstance {
         maxDropDown: 2,
         allowSprinting: false,
         allowParkour: false,
+        waterSpawnRescueEnabled: false,
+        waterSpawnRescueCommand: '/spawn',
+        waterSpawnRescueDelaySeconds: 8,
+        waterSpawnRescueCooldownSeconds: 60,
         ...(config.behaviorSettings?.pathSafety || {})
       }
     };
@@ -201,7 +258,6 @@ export class BotInstance {
       '!attack': this.cmdAttack.bind(this),
       '!patrol': this.cmdPatrol.bind(this),
       '!god': this.cmdGod.bind(this),
-      '!mine': this.cmdMine.bind(this),
       '!jump': this.cmdJump.bind(this),
       '!sneak': this.cmdSneak.bind(this)
     };
@@ -231,6 +287,203 @@ export class BotInstance {
   // 获取本机器人的日志
   getLogs() {
     return this.logs;
+  }
+
+  sendChatCommand(command) {
+    if (!this.bot || !this.status.connected) {
+      return { success: false, message: 'Bot 未连接' };
+    }
+
+    const text = String(command || '').trim();
+    if (!text) {
+      return { success: false, message: '命令不能为空' };
+    }
+
+    const beforePos = this.bot.entity?.position?.clone?.() || null;
+    this.bot.chat(text);
+    this.log('info', `已发送命令: ${text}，等待服务器响应`, '📤');
+
+    if (this.commandFeedbackTimer) {
+      clearTimeout(this.commandFeedbackTimer);
+    }
+
+    this.pendingCommandFeedback = {
+      command: text,
+      beforePos,
+      startedAt: Date.now(),
+      sawResponse: false
+    };
+
+    this.commandFeedbackTimer = setTimeout(() => {
+      const pending = this.pendingCommandFeedback;
+      if (!pending || pending.command !== text) return;
+
+      const afterPos = this.bot?.entity?.position || null;
+      const moved = pending.beforePos && afterPos && pending.beforePos.distanceTo(afterPos) >= 8;
+      if (!pending.sawResponse && moved) {
+        this.log('success', `命令可能已生效，位置变化: ${Math.floor(pending.beforePos.x)} ${Math.floor(pending.beforePos.y)} ${Math.floor(pending.beforePos.z)} -> ${Math.floor(afterPos.x)} ${Math.floor(afterPos.y)} ${Math.floor(afterPos.z)}`, '✅');
+      } else if (!pending.sawResponse) {
+        this.log('warning', `命令已发送但服务器无明确反馈: ${text}`, '⚠️');
+      }
+
+      this.pendingCommandFeedback = null;
+      this.commandFeedbackTimer = null;
+    }, 5000);
+
+    if (typeof this.commandFeedbackTimer.unref === 'function') {
+      this.commandFeedbackTimer.unref();
+    }
+
+    return { success: true, message: '命令已发送，等待服务器响应' };
+  }
+
+  handleCommandFeedback(message) {
+    if (!this.pendingCommandFeedback) return;
+    const text = String(message || '').trim();
+    if (!text) return;
+
+    const lower = text.toLowerCase();
+    const noPermission = lower.includes('permission') || text.includes('没有权限') || text.includes('无权限') || text.includes('权限不足');
+    const unknownCommand = lower.includes('unknown command') || lower.includes('unknown or incomplete command') || text.includes('未知命令') || text.includes('不存在的命令');
+    const cooldown = lower.includes('cooldown') || text.includes('冷却') || text.includes('请等待');
+    const teleporting = lower.includes('teleport') || lower.includes('warping') || text.includes('传送') || text.includes('正在传送');
+
+    if (noPermission) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 没有权限 (${text})`, '🚫');
+    } else if (unknownCommand) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 未知命令 (${text})`, '❓');
+    } else if (cooldown) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('warning', `服务器反馈: 命令冷却中 (${text})`, '⏳');
+    } else if (teleporting) {
+      this.pendingCommandFeedback.sawResponse = true;
+      this.log('success', `服务器反馈: ${text}`, '✅');
+    }
+  }
+
+  recordServerMessage(message) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    const now = Date.now();
+    this.recentServerMessages.push({ text, at: now });
+    this.recentServerMessages = this.recentServerMessages
+      .filter(item => now - item.at <= 30000)
+      .slice(-40);
+  }
+
+  findRecentDeathMessage() {
+    const username = String(this.bot?.username || this.status.username || '').toLowerCase();
+    if (!username) return null;
+    const deathHints = [
+      'died',
+      'was slain',
+      'was shot',
+      'drowned',
+      'burned',
+      'fell',
+      'blew up',
+      'hit the ground',
+      'killed',
+      '死亡',
+      '淹死',
+      '被',
+      '杀死',
+      '射杀',
+      '摔死',
+      '烧死',
+      '炸死'
+    ];
+    for (const item of [...this.recentServerMessages].reverse()) {
+      const lower = item.text.toLowerCase();
+      if (!lower.includes(username)) continue;
+      if (deathHints.some(hint => lower.includes(hint.toLowerCase()))) return item.text;
+    }
+    return null;
+  }
+
+  getNearbyEntitiesForDeath(type, range = 12, limit = 6) {
+    if (!this.bot?.entity) return [];
+    const origin = this.bot.entity.position;
+    return Object.values(this.bot.entities || {})
+      .filter(entity => entity && entity !== this.bot.entity && entity.type === type && entity.position)
+      .map(entity => ({
+        name: entity.username || entity.name || entity.type || 'unknown',
+        distance: origin.distanceTo(entity.position)
+      }))
+      .filter(entity => entity.distance <= range)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, limit);
+  }
+
+  getDeathEnvironmentInfo() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    const below = this.bot.blockAt(pos.offset(0, -1, 0));
+    return {
+      position: pos,
+      feet: feet?.name || 'unknown',
+      head: head?.name || 'unknown',
+      below: below?.name || 'unknown',
+      inWater: this.isBotInWater(),
+      inLava: feet?.name === 'lava' || head?.name === 'lava'
+    };
+  }
+
+  inferCauseFromDeathMessage(deathMessage) {
+    if (!deathMessage) return null;
+    const lower = deathMessage.toLowerCase();
+    const hostileNames = ['witch', 'enderman', 'creeper', 'skeleton', 'stray', 'bogged', 'zombie', 'drowned', 'spider', 'pillager', 'blaze', 'ghast', 'slime', 'phantom'];
+    const hostile = hostileNames.find(name => lower.includes(name));
+    if (hostile) return `服务器死亡消息显示被敌对生物击杀: ${hostile}`;
+    if (lower.includes('drowned')) return '服务器死亡消息显示死于溺水';
+    if (lower.includes('fell') || lower.includes('hit the ground')) return '服务器死亡消息显示死于摔落';
+    if (lower.includes('lava') || lower.includes('burned') || lower.includes('fire')) return '服务器死亡消息显示死于岩浆/燃烧';
+    if (lower.includes('magic')) return '服务器死亡消息显示死于魔法伤害';
+    if (lower.includes('shot')) return '服务器死亡消息显示死于远程射击';
+    if (lower.includes('killed') || lower.includes('slain')) return `服务器死亡消息: ${deathMessage}`;
+    return null;
+  }
+
+  inferDeathCause(environment, hostiles, deathMessage = null) {
+    const messageCause = this.inferCauseFromDeathMessage(deathMessage);
+    if (messageCause) return messageCause;
+    if (environment?.inLava) return '可能死于岩浆/燃烧伤害';
+    const nearest = hostiles[0];
+    if (nearest) return `可能被附近敌对生物击杀: ${nearest.name} (${nearest.distance.toFixed(1)} 格)`;
+    if (environment?.inWater) return '可能死于溺水或水中无法脱离';
+    return '未识别到明确死因，查看服务器死亡消息或坐标环境';
+  }
+
+  logDeathDiagnostics() {
+    const now = Date.now();
+    if (now - this.lastDeathDiagnosticsAt < 5000) return;
+    this.lastDeathDiagnosticsAt = now;
+
+    const environment = this.getDeathEnvironmentInfo();
+    const hostiles = this.getNearbyEntitiesForDeath('hostile');
+    const players = this.getNearbyEntitiesForDeath('player');
+    const deathMessage = this.findRecentDeathMessage();
+
+    if (deathMessage && deathMessage !== this.lastDeathMessageLogged) {
+      this.lastDeathMessageLogged = deathMessage;
+      this.log('warning', `死亡消息: ${deathMessage}`, '💀');
+    }
+    if (environment?.position) {
+      const pos = environment.position;
+      this.log('warning', `死亡坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
+      this.log('warning', `死亡环境: 脚下=${environment.feet} 头部=${environment.head} 下方=${environment.below} 水中=${environment.inWater ? '是' : '否'} 岩浆=${environment.inLava ? '是' : '否'}`, '🧭');
+    }
+    if (hostiles.length > 0) {
+      this.log('warning', `死亡附近敌对生物: ${hostiles.map(entity => `${entity.name}(${entity.distance.toFixed(1)}格)`).join(', ')}`, '🛡️');
+    }
+    if (players.length > 0) {
+      this.log('warning', `死亡附近玩家: ${players.map(entity => `${entity.name}(${entity.distance.toFixed(1)}格)`).join(', ')}`, '🧍');
+    }
+    this.log('warning', `死亡诊断: ${this.inferDeathCause(environment, hostiles, deathMessage)}`, '🔎');
   }
 
   // 清空本机器人的日志
@@ -356,11 +609,70 @@ export class BotInstance {
     };
   }
 
+  isPanelConfigured() {
+    const panel = this.status.pterodactyl;
+    if (!panel || !panel.url || !panel.serverId) return false;
+
+    if (panel.authType === 'cookie') {
+      return !!panel.cookie;
+    }
+    return !!panel.apiKey;
+  }
+
+  getPanelAuthHeaders() {
+    const panel = this.status.pterodactyl;
+    if (!panel) return {};
+
+    const headers = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    };
+
+    if (panel.authType === 'cookie') {
+      headers['Cookie'] = panel.cookie;
+      if (panel.csrfToken) {
+        headers['X-CSRF-Token'] = panel.csrfToken;
+        headers['X-Xsrf-Token'] = panel.csrfToken;
+      }
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+      headers['Referer'] = `${panel.url}/server/${panel.serverId}`;
+      headers['Origin'] = panel.url;
+    } else {
+      headers['Authorization'] = `Bearer ${panel.apiKey}`;
+    }
+
+    return headers;
+  }
+
+  getPanelHttpOptions(extraConfig = {}) {
+    const options = {
+      ...extraConfig,
+      headers: { ...this.getPanelAuthHeaders(), ...(extraConfig.headers || {}) },
+      timeout: extraConfig.timeout || 15000
+    };
+
+    if (this.config.proxyNodeId) {
+      const localPort = proxyService.getLocalPort(this.config.proxyNodeId);
+      if (localPort) {
+        const agent = new SocksProxyAgent(`socks5://127.0.0.1:${localPort}`);
+        options.httpsAgent = agent;
+        options.httpAgent = agent;
+      }
+    }
+
+    return options;
+  }
+
   cleanup() {
     if (this.activityMonitorInterval) {
       clearInterval(this.activityMonitorInterval);
       this.activityMonitorInterval = null;
     }
+    if (this.waterRescueInterval) {
+      clearInterval(this.waterRescueInterval);
+      this.waterRescueInterval = null;
+    }
+    this.stopWaterRescueControls();
     if (this.autoChatInterval) {
       clearInterval(this.autoChatInterval);
       this.autoChatInterval = null;
@@ -377,6 +689,15 @@ export class BotInstance {
       clearInterval(this.restartCommandTimer);
       this.restartCommandTimer = null;
     }
+    if (this.respawnRequestTimer) {
+      clearTimeout(this.respawnRequestTimer);
+      this.respawnRequestTimer = null;
+    }
+    if (this.commandFeedbackTimer) {
+      clearTimeout(this.commandFeedbackTimer);
+      this.commandFeedbackTimer = null;
+    }
+    this.pendingCommandFeedback = null;
 
     // 停止所有行为
     if (this.behaviors) {
@@ -421,6 +742,252 @@ export class BotInstance {
         this.attemptRepair('无响应');
       }
     }, 30000); // 每30秒检查一次
+  }
+
+  /**
+   * 防溺水自救：掉进水里时暂停原移动，尝试找岸边并持续上浮。
+   */
+  startWaterRescueMonitor() {
+    if (this.waterRescueInterval) {
+      clearInterval(this.waterRescueInterval);
+    }
+
+    this.waterRescueInterval = setInterval(() => this.tickWaterRescue(), WATER_RESCUE_INTERVAL_MS);
+    if (typeof this.waterRescueInterval.unref === 'function') {
+      this.waterRescueInterval.unref();
+    }
+  }
+
+  isWaterBlock(block) {
+    return !!block && WATER_BLOCK_NAMES.has(block.name);
+  }
+
+  isUnsafeWaterEscapeBlock(block) {
+    if (!block) return true;
+    return DANGEROUS_WATER_RESCUE_BLOCKS.has(block.name);
+  }
+
+  isBotInWater() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return false;
+    if (this.bot.entity.isInWater) return true;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    return this.isWaterBlock(feet) || this.isWaterBlock(head);
+  }
+
+  stopWaterRescueControls() {
+    const wasActive = this.waterRescueActive;
+    this.waterRescueActive = false;
+    this.waterEscapeGoal = null;
+    this.waterRescueLastPosition = null;
+    this.waterRescueLastMovedAt = 0;
+    this.waterRescueNearGoalSince = 0;
+    this.restoreWaterRescueMovements();
+    if (wasActive && this.bot?.pathfinder) {
+      this.bot.pathfinder.stop();
+    }
+    if (!this.bot?.setControlState) return;
+    this.bot.setControlState('forward', false);
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
+    this.bot.setControlState('jump', false);
+    this.bot.setControlState('sneak', false);
+    this.bot.setControlState('sprint', false);
+  }
+
+  applyWaterRescueMovements() {
+    if (!this.bot?.pathfinder || !this.bot?.registry) return;
+    if (!this.waterRescueOriginalMovements) {
+      this.waterRescueOriginalMovements = this.movements || null;
+    }
+    const rescueMovements = new Movements(this.bot, this.bot.registry);
+    rescueMovements.canDig = false;
+    this.applyMovementSafety(rescueMovements);
+    rescueMovements.liquidCost = 1;
+    rescueMovements.waterCost = 1;
+    rescueMovements.allowSprinting = true;
+    rescueMovements.allowParkour = false;
+    rescueMovements.maxDropDown = Math.min(rescueMovements.maxDropDown ?? 2, 2);
+    this.bot.pathfinder.setMovements(rescueMovements);
+  }
+
+  restoreWaterRescueMovements() {
+    if (!this.bot?.pathfinder || !this.waterRescueOriginalMovements) return;
+    this.bot.pathfinder.setMovements(this.waterRescueOriginalMovements);
+    this.waterRescueOriginalMovements = null;
+  }
+
+  isWaterEscapeStandable(feetPos) {
+    const feet = this.bot.blockAt(feetPos);
+    const head = this.bot.blockAt(feetPos.offset(0, 1, 0));
+    const below = this.bot.blockAt(feetPos.offset(0, -1, 0));
+    if (!feet || !head || !below) return false;
+    if (this.isWaterBlock(feet) || this.isWaterBlock(head) || this.isWaterBlock(below)) return false;
+    if (this.isUnsafeWaterEscapeBlock(feet) || this.isUnsafeWaterEscapeBlock(head) || this.isUnsafeWaterEscapeBlock(below)) return false;
+    if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') return false;
+    return below.boundingBox !== 'empty';
+  }
+
+  findWaterEscapeGoal(minDistance = 0) {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
+    const origin = this.bot.entity.position.floored();
+    const current = this.bot.entity.position;
+    let best = null;
+    let bestScore = Infinity;
+
+    for (let radius = 1; radius <= WATER_ESCAPE_SEARCH_RADIUS; radius++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          for (let dy = 3; dy >= -3; dy--) {
+            const feetPos = origin.offset(dx, dy, dz);
+            if (!this.isWaterEscapeStandable(feetPos)) continue;
+            const distance = current.distanceTo(feetPos.offset(0.5, 0, 0.5));
+            if (distance < minDistance) continue;
+            const horizontal = Math.sqrt(dx * dx + dz * dz);
+            const verticalPenalty = Math.abs(dy) * 1.5;
+            const score = horizontal + verticalPenalty;
+            if (score >= bestScore) continue;
+            bestScore = score;
+            best = feetPos;
+          }
+        }
+      }
+      if (best && radius >= 8) break;
+    }
+
+    if (!best) return null;
+    return {
+      goal: new goals.GoalNear(best.x, best.y, best.z, 1),
+      position: best,
+      distance: this.bot.entity.position.distanceTo(best)
+    };
+  }
+
+  updateWaterRescueStuckState(now) {
+    if (!this.bot?.entity?.position) return;
+    const current = this.bot.entity.position;
+    if (!this.waterRescueLastPosition) {
+      this.waterRescueLastPosition = current.clone();
+      this.waterRescueLastMovedAt = now;
+      return;
+    }
+    if (current.distanceTo(this.waterRescueLastPosition) >= 1.2) {
+      this.waterRescueLastPosition = current.clone();
+      this.waterRescueLastMovedAt = now;
+    }
+  }
+
+  applyWaterRescueControls() {
+    if (!this.bot?.setControlState) return;
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
+    this.bot.setControlState('sneak', false);
+    this.bot.setControlState('sprint', true);
+    this.bot.setControlState('jump', true);
+
+    const target = this.waterEscapeGoal?.position;
+    if (!target || !this.bot.entity?.position) {
+      this.bot.setControlState('forward', false);
+      return;
+    }
+
+    this.bot.lookAt(target.offset(0.5, 1, 0.5));
+    this.bot.setControlState('forward', true);
+  }
+
+  tickWaterRescue() {
+    if (!this.bot || !this.status.connected || !this.bot.entity) return;
+    if (this.behaviorSettings?.pathSafety?.avoidWater === false) {
+      if (this.waterRescueActive) this.stopWaterRescueControls();
+      return;
+    }
+
+    if (!this.isBotInWater()) {
+      if (this.waterRescueActive) this.stopWaterRescueControls();
+      this.waterRescueStartedAt = 0;
+      return;
+    }
+
+    const now = Date.now();
+    this.updateActivity();
+
+    if (!this.waterRescueActive) {
+      this.waterRescueActive = true;
+      this.waterRescueStartedAt = now;
+      this.lastWaterEscapeGoalAt = 0;
+      this.waterEscapeGoal = null;
+      this.waterRescueLastPosition = this.bot.entity.position.clone();
+      this.waterRescueLastMovedAt = now;
+      this.waterRescueNearGoalSince = 0;
+      this.applyWaterRescueMovements();
+    }
+
+    this.updateWaterRescueStuckState(now);
+
+    if (now - this.lastWaterRescueLogAt > WATER_RESCUE_LOG_INTERVAL_MS) {
+      this.lastWaterRescueLogAt = now;
+      this.log('warning', '检测到机器人在水中，正在大范围寻找岸边自救', '🌊');
+    }
+
+    const safety = this.behaviorSettings?.pathSafety || {};
+    if (safety.waterSpawnRescueEnabled) {
+      const delayMs = Math.max(1, Number(safety.waterSpawnRescueDelaySeconds) || 8) * 1000;
+      const cooldownMs = Math.max(5, Number(safety.waterSpawnRescueCooldownSeconds) || 60) * 1000;
+      const command = String(safety.waterSpawnRescueCommand || '/spawn').trim() || '/spawn';
+      if (this.waterRescueStartedAt && now - this.waterRescueStartedAt >= delayMs && now - this.lastWaterSpawnRescueAt >= cooldownMs) {
+        this.lastWaterSpawnRescueAt = now;
+        this.log('warning', `水中停留过久，尝试发送救援命令 ${command}`, '🛟');
+        this.sendChatCommand(command);
+      }
+    }
+
+    if (this.waterEscapeGoal?.position) {
+      const goalDistance = this.bot.entity.position.distanceTo(this.waterEscapeGoal.position.offset(0.5, 0, 0.5));
+      if (goalDistance <= 2 && this.isBotInWater()) {
+        if (!this.waterRescueNearGoalSince) this.waterRescueNearGoalSince = now;
+        if (now - this.waterRescueNearGoalSince > WATER_ESCAPE_NEAR_GOAL_STUCK_MS) {
+          this.waterEscapeGoal = null;
+          this.lastWaterEscapeGoalAt = 0;
+          this.waterRescueNearGoalSince = 0;
+          if (this.bot.pathfinder) this.bot.pathfinder.stop();
+          this.log('warning', '水中自救已到岸边但仍在水中，重新寻找更远落脚点', '🛟');
+        }
+      } else {
+        this.waterRescueNearGoalSince = 0;
+      }
+    }
+
+    if (this.bot.pathfinder && (!this.waterEscapeGoal || now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS)) {
+      const minDistance = this.isBotInWater() ? 2.5 : 0;
+      const escape = this.findWaterEscapeGoal(minDistance);
+      if (escape) {
+        this.waterEscapeGoal = escape;
+        this.lastWaterEscapeGoalAt = now;
+        this.bot.pathfinder.setGoal(escape.goal, true);
+        if (now - this.lastWaterRescueLogAt < 1000) {
+          this.log('info', `水中自救目标: X=${escape.position.x} Y=${escape.position.y} Z=${escape.position.z}，距离 ${escape.distance.toFixed(1)} 格`, '🛟');
+        }
+      } else {
+        this.waterEscapeGoal = null;
+        this.bot.pathfinder.stop();
+      }
+    }
+
+    if (this.waterRescueLastMovedAt && now - this.waterRescueLastMovedAt > WATER_ESCAPE_STUCK_MS) {
+      this.lastWaterEscapeGoalAt = 0;
+      this.waterEscapeGoal = null;
+      this.waterRescueNearGoalSince = 0;
+      this.waterRescueLastPosition = this.bot.entity.position.clone();
+      this.waterRescueLastMovedAt = now;
+      if (this.bot.pathfinder) this.bot.pathfinder.stop();
+      this.log('warning', '水中自救疑似卡住，重新扫描更远岸边', '🛟');
+    }
+
+    this.applyWaterRescueControls();
   }
 
   /**
@@ -560,6 +1127,7 @@ export class BotInstance {
         };
 
         this.bot = mineflayer.createBot(botOptions);
+        const activeBot = this.bot;
 
         this.connectionTimeout = setTimeout(() => {
           if (this.bot && !this.status.connected) {
@@ -579,6 +1147,7 @@ export class BotInstance {
           this.usernameRetryCount = 0;
           this.updateActivity();
           this.startActivityMonitor();
+          this.startWaterRescueMonitor();
 
           if (this.modes.autoChat) {
             this.startAutoChat();
@@ -593,6 +1162,8 @@ export class BotInstance {
           // 记录出生点用于巡逻
           if (this.bot.entity) {
             this.spawnPosition = this.bot.entity.position.clone();
+            const pos = this.bot.entity.position;
+            this.log('info', `进服坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
           }
 
           try {
@@ -607,11 +1178,6 @@ export class BotInstance {
 
           // 初始化行为管理器，传递日志函数以便巡逻等行为输出坐标
           const controller = {
-            startMining: () => {
-              this.stopConflictingModes('mining');
-              return this.behaviors?.mining?.start();
-            },
-            stopMining: () => this.behaviors?.mining?.stop(),
             startPatrol: () => {
               this.stopConflictingModes('patrol');
               const waypoints = this.behaviorSettings.patrol?.waypoints || null;
@@ -651,6 +1217,12 @@ export class BotInstance {
 
         // 死亡自动重生
         this.bot.on('death', () => {
+          if (this.bot !== activeBot) return;
+          const now = Date.now();
+          if (now - this.lastDeathHandledAt < 5000) return;
+          this.lastDeathHandledAt = now;
+
+          this.logDeathDiagnostics();
           this.log('warning', '机器人死亡，正在重生...', '💀');
           // 停止所有行为
           if (this.behaviors) {
@@ -660,31 +1232,46 @@ export class BotInstance {
               this.log('error', `停止行为失败: ${e.message}`, '❌');
             }
           }
+          if (this.respawnRequestTimer) {
+            clearTimeout(this.respawnRequestTimer);
+            this.respawnRequestTimer = null;
+          }
           // 延迟一点再重生，避免太快
           const tryRespawn = (attempt = 1) => {
-            if (!this.bot) return;
+            if (this.bot !== activeBot) return;
             try {
-              this.bot.respawn();
+              activeBot.respawn();
               this.log('info', `重生请求已发送 (尝试 ${attempt})`, '🔄');
             } catch (e) {
               this.log('error', `重生失败 (尝试 ${attempt}): ${e.message}`, '❌');
               if (attempt < 3) {
-                setTimeout(() => tryRespawn(attempt + 1), 1000);
+                this.respawnRequestTimer = setTimeout(() => tryRespawn(attempt + 1), 1000);
               }
             }
           };
-          setTimeout(() => tryRespawn(), 500);
+          this.respawnRequestTimer = setTimeout(() => tryRespawn(), 500);
         });
 
         this.bot.on('respawn', () => {
+          if (this.bot !== activeBot) return;
+          const now = Date.now();
+          if (now - this.lastRespawnHandledAt < 3000) return;
+          this.lastRespawnHandledAt = now;
+          if (this.respawnRequestTimer) {
+            clearTimeout(this.respawnRequestTimer);
+            this.respawnRequestTimer = null;
+          }
+
           this.log('info', '已重生', '✨');
           // 更新出生点
-          if (this.bot?.entity) {
-            this.spawnPosition = this.bot.entity.position.clone();
+          if (activeBot.entity) {
+            this.spawnPosition = activeBot.entity.position.clone();
+            const pos = activeBot.entity.position;
+            this.log('info', `重生坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
           }
           if (this.modes.invincible) {
             setTimeout(() => {
-              this.applyInvincibleMode();
+              if (this.bot === activeBot) this.applyInvincibleMode();
             }, 500);
           }
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
@@ -725,6 +1312,12 @@ export class BotInstance {
           if (message.startsWith('!')) {
             await this.handleCommand(chatUsername, message);
           }
+        });
+
+        this.bot.on('message', (jsonMsg) => {
+          const text = jsonMsg.toString();
+          this.recordServerMessage(text);
+          this.handleCommandFeedback(text);
         });
 
         this.bot.on('error', (err) => {
@@ -831,7 +1424,6 @@ export class BotInstance {
         fileAccessType: this.status.fileAccessType || 'pterodactyl',
         autoOp: this.status.autoOp,
         autoReconnect: this.status.autoReconnect,
-        agentId: this.status.agentId,
         behaviorSettings: this.behaviorSettings
       };
       this.config = { ...this.config, ...nextConfig };
@@ -917,16 +1509,6 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.fishing) {
-          const options = this.behaviorSettings.fishing || {};
-          this.behaviors.fishing.start(options);
-          this.log('info', '自动钓鱼已恢复', '🎣');
-        }
-      } catch (e) {
-        this.log('warning', `自动钓鱼恢复失败: ${e.message}`, '⚠️');
-      }
-
-      try {
         if (this.modes.rateLimit) {
           const options = this.behaviorSettings.rateLimit || {};
           this.behaviors.rateLimit.start(options);
@@ -937,7 +1519,20 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.humanize) {
+        if (this.modes.playerLike) {
+          const result = this.startPlayerLikeBehaviors();
+          if (result.success) {
+            this.log('info', '生存智能已恢复', '🧍');
+          } else {
+            this.log('warning', `生存智能恢复失败: ${result.message}`, '⚠️');
+          }
+        }
+      } catch (e) {
+        this.log('warning', `生存智能恢复失败: ${e.message}`, '⚠️');
+      }
+
+      try {
+        if (!this.modes.playerLike && this.modes.humanize) {
           const options = this.behaviorSettings.humanize || {};
           this.behaviors.humanize.start(options);
           this.log('info', '拟人已恢复', '🧍');
@@ -947,7 +1542,7 @@ export class BotInstance {
       }
 
       try {
-        if (this.modes.safeIdle) {
+        if (!this.modes.playerLike && this.modes.safeIdle) {
           const options = this.behaviorSettings.safeIdle || {};
           this.behaviors.safeIdle.start(options);
           this.log('info', '安全挂机已恢复', '⛺');
@@ -1326,14 +1921,6 @@ export class BotInstance {
     return this.status.rcon;
   }
 
-  setAgentId(agentId) {
-    this.status.agentId = agentId || null;
-    this.config.agentId = this.status.agentId;
-    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
-    this.saveConfig();
-    return this.status.agentId;
-  }
-
   /**
    * 发送翼龙面板电源信号
    * @param {string} signal - 电源信号: 'start' | 'stop' | 'restart' | 'kill'
@@ -1345,7 +1932,7 @@ export class BotInstance {
     }
 
     const panel = this.status.pterodactyl;
-    if (!panel || !panel.url || !panel.apiKey || !panel.serverId) {
+    if (!this.isPanelConfigured()) {
       return { success: false, message: '翼龙面板未配置' };
     }
 
@@ -1356,48 +1943,54 @@ export class BotInstance {
       'kill': '强制终止'
     };
 
-    try {
-      const url = `${panel.url}/api/client/servers/${panel.serverId}/power`;
-      this.log('info', `正在发送电源信号: ${signalNames[signal]} -> ${url}`, '⚡');
+    const urls = [
+      `${panel.url}/api/client/servers/${panel.serverId}/power`,
+      `${panel.url}/api/servers/${panel.serverId}/power`
+    ];
 
-      const response = await axios.post(url, { signal }, {
-        headers: {
-          'Authorization': `Bearer ${panel.apiKey}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 15000
-      });
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        this.log('info', `正在发送电源信号: ${signalNames[signal]} -> ${url}`, '⚡');
 
-      this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
-      return { success: true, message: `已发送: ${signalNames[signal]}` };
-    } catch (error) {
-      const status = error.response?.status;
-      const errDetail = error.response?.data?.errors?.[0]?.detail;
-      const errMsg = errDetail || error.response?.data?.message || error.message;
+        await axios.post(url, { signal }, this.getPanelHttpOptions());
 
-      // 打印调试信息到控制台
-      console.log('[Power API Debug]', {
-        url: `${panel.url}/api/client/servers/${panel.serverId}/power`,
-        status,
-        apiKeyPrefix: panel.apiKey?.substring(0, 10) + '...',
-        response: error.response?.data
-      });
-
-      let hint = '';
-      if (status === 403) {
-        hint = ' (403常见原因: 1.需要Client API Key而非Application API Key 2.API Key需在面板Account→API Credentials创建 3.检查Key是否有该服务器权限)';
-      } else if (status === 404) {
-        hint = ' (检查: 服务器ID应为短ID如c5281c3e，不是数字ID)';
-      } else if (status === 409) {
-        hint = ' (服务器状态冲突，可能已在运行或已停止)';
-      } else if (status === 401) {
-        hint = ' (API Key无效或已过期)';
+        this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
+        return { success: true, message: `已发送: ${signalNames[signal]}` };
+      } catch (error) {
+        lastError = error;
+        if (error.response?.status !== 404 || url === urls[urls.length - 1]) {
+          break;
+        }
+        this.log('warning', '标准翼龙电源接口不可用，尝试 Minerack 兼容接口', '⚡');
       }
-
-      this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
-      return { success: false, message: `${errMsg}${hint}` };
     }
+
+    const status = lastError?.response?.status;
+    const errDetail = lastError?.response?.data?.errors?.[0]?.detail;
+    const errMsg = errDetail || lastError?.response?.data?.message || lastError?.message;
+
+    console.log('[Power API Debug]', {
+      status,
+      authType: panel.authType || 'api',
+      response: lastError?.response?.data
+    });
+
+    let hint = '';
+    if (status === 403) {
+      hint = panel.authType === 'cookie'
+        ? ' (Cookie 登录已失效或账号权限不足)'
+        : ' (403常见原因: 1.需要Client API Key而非Application API Key 2.API Key需在面板Account→API Credentials创建 3.检查Key是否有该服务器权限)';
+    } else if (status === 404) {
+      hint = ' (检查: 服务器ID应为短ID如c5281c3e，或面板接口路径不兼容)';
+    } else if (status === 409) {
+      hint = ' (服务器状态冲突，可能已在运行或已停止)';
+    } else if (status === 401 || status === 419) {
+      hint = panel.authType === 'cookie' ? ' (Cookie/CSRF 已失效，请重新从面板复制)' : ' (API Key无效或已过期)';
+    }
+
+    this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
+    return { success: false, message: `${errMsg}${hint}` };
   }
 
   // ==================== 文件管理 API ====================
@@ -1831,6 +2424,41 @@ export class BotInstance {
     return false;
   }
 
+  startPlayerLikeBehaviors() {
+    if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
+    const humanizeOptions = this.behaviorSettings.humanize || {};
+    const safeIdleOptions = this.behaviorSettings.safeIdle || {};
+    const guardOptions = this.behaviorSettings.guard || {};
+    const humanizeResult = this.behaviors.humanize.active
+      ? { success: true, message: '拟人已在运行' }
+      : this.behaviors.humanize.start(humanizeOptions);
+    const safeIdleResult = this.behaviors.safeIdle.active
+      ? { success: true, message: '安全挂机已在运行' }
+      : this.behaviors.safeIdle.start(safeIdleOptions);
+    const guardWasActive = this.behaviors.guard.active;
+    const guardResult = guardWasActive
+      ? { success: true, message: '守护已在运行' }
+      : this.behaviors.guard.start({ ...guardOptions, keepFightingAtLowHealth: true });
+    this.playerLikeStartedGuard = !guardWasActive && guardResult.success;
+
+    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success) {
+      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}` };
+    }
+
+    return { success: true, message: '生存智能已开启，已启用防怪守护' };
+  }
+
+  stopPlayerLikeBehaviors() {
+    if (!this.behaviors) return { success: false, message: 'Bot 未连接' };
+    if (this.behaviors.humanize.active) this.behaviors.humanize.stop();
+    if (this.behaviors.safeIdle.active) this.behaviors.safeIdle.stop();
+    if (this.playerLikeStartedGuard && this.behaviors.guard.active) {
+      this.behaviors.guard.stop();
+      this.playerLikeStartedGuard = false;
+    }
+    return { success: true, message: '生存智能已关闭' };
+  }
+
   stopMode(mode) {
     if (!this.behaviors) return;
     switch (mode) {
@@ -1846,17 +2474,9 @@ export class BotInstance {
         this.behaviors.patrol.stop();
         this.modes.patrol = false;
         break;
-      case 'mining':
-        this.behaviors.mining.stop();
-        this.modes.mining = false;
-        break;
       case 'guard':
         this.behaviors.guard.stop();
         this.modes.guard = false;
-        break;
-      case 'fishing':
-        this.behaviors.fishing.stop();
-        this.modes.fishing = false;
         break;
       case 'humanize':
         this.behaviors.humanize.stop();
@@ -1865,6 +2485,10 @@ export class BotInstance {
       case 'safeIdle':
         this.behaviors.safeIdle.stop();
         this.modes.safeIdle = false;
+        break;
+      case 'playerLike':
+        this.stopPlayerLikeBehaviors();
+        this.modes.playerLike = false;
         break;
       case 'workflow':
         this.behaviors.workflow.stop();
@@ -1877,22 +2501,18 @@ export class BotInstance {
 
   stopConflictingModes(target) {
     const conflicts = {
-      follow: ['patrol', 'mining'],
-      patrol: ['follow', 'mining', 'attack'],
-      mining: ['follow', 'patrol', 'attack'],
-      attack: ['patrol', 'mining'],
-      guard: ['follow', 'patrol', 'mining', 'attack', 'fishing'],
-      fishing: ['follow', 'patrol', 'mining', 'attack', 'guard']
+      follow: ['patrol'],
+      patrol: ['follow', 'attack'],
+      attack: ['patrol'],
+      guard: ['follow', 'patrol', 'attack']
     };
 
     const toStop = conflicts[target] || [];
     toStop.forEach(mode => {
       if (mode === 'follow' && this.modes.follow) this.stopMode('follow');
       if (mode === 'patrol' && this.modes.patrol) this.stopMode('patrol');
-      if (mode === 'mining' && this.modes.mining) this.stopMode('mining');
       if (mode === 'attack' && this.modes.autoAttack) this.stopMode('attack');
       if (mode === 'guard' && this.modes.guard) this.stopMode('guard');
-      if (mode === 'fishing' && this.modes.fishing) this.stopMode('fishing');
     });
   }
 
@@ -1900,25 +2520,19 @@ export class BotInstance {
     const messages = {
       follow: { target_lost: '跟随目标已离开，自动停止跟随' },
       attack: { low_health: '生命值过低，自动停止攻击' },
-      mining: { inventory_full: '背包已满，自动停止挖矿' },
       guard: { low_health: '生命值过低，自动停止守护' }
     };
 
     if (behavior === 'follow') this.modes.follow = false;
     if (behavior === 'attack') this.modes.autoAttack = false;
-    if (behavior === 'mining') this.modes.mining = false;
     if (behavior === 'guard') this.modes.guard = false;
-    if (behavior === 'fishing') this.modes.fishing = false;
     if (behavior === 'antiAfk') this.modes.antiAfk = false;
     if (behavior === 'autoEat') this.modes.autoEat = false;
     if (behavior === 'rateLimit') this.modes.rateLimit = false;
     if (behavior === 'humanize') this.modes.humanize = false;
     if (behavior === 'safeIdle') this.modes.safeIdle = false;
+    if (behavior === 'playerLike') this.modes.playerLike = false;
     if (behavior === 'workflow') this.modes.workflow = false;
-
-    if (behavior === 'mining' && this.behaviors?.workflow?.onStepComplete) {
-      this.behaviors.workflow.onStepComplete('mining', reason || 'done');
-    }
 
     const msg = messages[behavior]?.[reason];
     if (msg && this.bot) {
@@ -1934,7 +2548,6 @@ export class BotInstance {
       antiAfk: { ...(this.behaviorSettings.antiAfk || {}) },
       autoEat: { ...(this.behaviorSettings.autoEat || {}) },
       guard: { ...(this.behaviorSettings.guard || {}) },
-      fishing: { ...(this.behaviorSettings.fishing || {}) },
       rateLimit: { ...(this.behaviorSettings.rateLimit || {}) },
       humanize: { ...(this.behaviorSettings.humanize || {}) },
       safeIdle: { ...(this.behaviorSettings.safeIdle || {}) },
@@ -2001,13 +2614,6 @@ export class BotInstance {
       if (!Number.isNaN(pathCooldownMs)) next.guard.pathCooldownMs = Math.max(300, pathCooldownMs);
     }
 
-    if (settings.fishing) {
-      const intervalSeconds = Number(settings.fishing.intervalSeconds);
-      const timeoutSeconds = Number(settings.fishing.timeoutSeconds);
-      if (!Number.isNaN(intervalSeconds)) next.fishing.intervalSeconds = Math.max(1, intervalSeconds);
-      if (!Number.isNaN(timeoutSeconds)) next.fishing.timeoutSeconds = Math.max(5, timeoutSeconds);
-    }
-
     if (settings.rateLimit) {
       const globalCooldownSeconds = Number(settings.rateLimit.globalCooldownSeconds);
       const maxPerMinute = Number(settings.rateLimit.maxPerMinute);
@@ -2022,12 +2628,50 @@ export class BotInstance {
       const stepChance = Number(settings.humanize.stepChance);
       const sneakChance = Number(settings.humanize.sneakChance);
       const swingChance = Number(settings.humanize.swingChance);
+      const stepDurationMinMs = Number(settings.humanize.stepDurationMinMs);
+      const stepDurationMaxMs = Number(settings.humanize.stepDurationMaxMs);
+      const nearbyPlayerRange = Number(settings.humanize.nearbyPlayerRange);
+      const approachPlayerRange = Number(settings.humanize.approachPlayerRange);
+      const approachStopDistance = Number(settings.humanize.approachStopDistance);
+      const playerReactionIntervalSeconds = Number(settings.humanize.playerReactionIntervalSeconds);
+      const playerActionChance = Number(settings.humanize.playerActionChance);
+      const approachChance = Number(settings.humanize.approachChance);
+      const greetingChance = Number(settings.humanize.greetingChance);
+      const greetingGlobalCooldownSeconds = Number(settings.humanize.greetingGlobalCooldownSeconds);
+      const greetingPlayerCooldownSeconds = Number(settings.humanize.greetingPlayerCooldownSeconds);
       if (!Number.isNaN(intervalSeconds)) next.humanize.intervalSeconds = Math.max(5, intervalSeconds);
       if (!Number.isNaN(lookRange)) next.humanize.lookRange = Math.max(2, lookRange);
       if (!Number.isNaN(actionChance)) next.humanize.actionChance = Math.min(1, Math.max(0, actionChance));
       if (!Number.isNaN(stepChance)) next.humanize.stepChance = Math.min(1, Math.max(0, stepChance));
       if (!Number.isNaN(sneakChance)) next.humanize.sneakChance = Math.min(1, Math.max(0, sneakChance));
       if (!Number.isNaN(swingChance)) next.humanize.swingChance = Math.min(1, Math.max(0, swingChance));
+      if (!Number.isNaN(stepDurationMinMs)) next.humanize.stepDurationMinMs = Math.max(150, stepDurationMinMs);
+      if (!Number.isNaN(stepDurationMaxMs)) next.humanize.stepDurationMaxMs = Math.max(next.humanize.stepDurationMinMs || 150, stepDurationMaxMs);
+      if (typeof settings.humanize.jumpUpEnabled === 'boolean') next.humanize.jumpUpEnabled = settings.humanize.jumpUpEnabled;
+      if (!Number.isNaN(nearbyPlayerRange)) next.humanize.nearbyPlayerRange = Math.max(3, nearbyPlayerRange);
+      if (!Number.isNaN(approachPlayerRange)) next.humanize.approachPlayerRange = Math.max(4, approachPlayerRange);
+      if (!Number.isNaN(approachStopDistance)) next.humanize.approachStopDistance = Math.max(2, approachStopDistance);
+      if (!Number.isNaN(playerReactionIntervalSeconds)) next.humanize.playerReactionIntervalSeconds = Math.max(1, playerReactionIntervalSeconds);
+      if (!Number.isNaN(playerActionChance)) next.humanize.playerActionChance = Math.min(1, Math.max(0, playerActionChance));
+      if (!Number.isNaN(approachChance)) next.humanize.approachChance = Math.min(1, Math.max(0, approachChance));
+      if (typeof settings.humanize.greetingEnabled === 'boolean') next.humanize.greetingEnabled = settings.humanize.greetingEnabled;
+      if (!Number.isNaN(greetingChance)) next.humanize.greetingChance = Math.min(1, Math.max(0, greetingChance));
+      if (!Number.isNaN(greetingGlobalCooldownSeconds)) next.humanize.greetingGlobalCooldownSeconds = Math.max(10, greetingGlobalCooldownSeconds);
+      if (!Number.isNaN(greetingPlayerCooldownSeconds)) next.humanize.greetingPlayerCooldownSeconds = Math.max(30, greetingPlayerCooldownSeconds);
+      const chatMessageFields = [
+        'greetingMessages',
+        'approachGreetingMessages',
+        'leaveGreetingMessages',
+        'hurtGreetingMessages'
+      ];
+      for (const field of chatMessageFields) {
+        if (!Array.isArray(settings.humanize[field])) continue;
+        const messages = settings.humanize[field]
+          .map(message => String(message || '').trim())
+          .filter(message => message && !message.startsWith('/'))
+          .map(message => message.slice(0, 40));
+        if (messages.length > 0) next.humanize[field] = messages;
+      }
     }
 
     if (settings.safeIdle) {
@@ -2044,14 +2688,14 @@ export class BotInstance {
     }
 
     if (settings.workflow) {
-      const steps = Array.isArray(settings.workflow.steps) ? settings.workflow.steps.map(step => String(step)) : null;
+      const steps = Array.isArray(settings.workflow.steps)
+        ? settings.workflow.steps.map(step => String(step)).filter(step => step !== 'mining')
+        : null;
       const patrolSeconds = Number(settings.workflow.patrolSeconds);
       const restSeconds = Number(settings.workflow.restSeconds);
-      const miningMaxSeconds = Number(settings.workflow.miningMaxSeconds);
       if (steps && steps.length > 0) next.workflow.steps = steps;
       if (!Number.isNaN(patrolSeconds)) next.workflow.patrolSeconds = Math.max(10, patrolSeconds);
       if (!Number.isNaN(restSeconds)) next.workflow.restSeconds = Math.max(5, restSeconds);
-      if (!Number.isNaN(miningMaxSeconds)) next.workflow.miningMaxSeconds = Math.max(30, miningMaxSeconds);
     }
 
     if (settings.pathSafety) {
@@ -2062,6 +2706,15 @@ export class BotInstance {
       if (!Number.isNaN(maxDropDown)) next.pathSafety.maxDropDown = Math.max(0, maxDropDown);
       if (typeof settings.pathSafety.allowSprinting === 'boolean') next.pathSafety.allowSprinting = settings.pathSafety.allowSprinting;
       if (typeof settings.pathSafety.allowParkour === 'boolean') next.pathSafety.allowParkour = settings.pathSafety.allowParkour;
+      if (typeof settings.pathSafety.waterSpawnRescueEnabled === 'boolean') next.pathSafety.waterSpawnRescueEnabled = settings.pathSafety.waterSpawnRescueEnabled;
+      if (settings.pathSafety.waterSpawnRescueCommand !== undefined) {
+        const command = String(settings.pathSafety.waterSpawnRescueCommand).trim();
+        next.pathSafety.waterSpawnRescueCommand = command || '/spawn';
+      }
+      const waterSpawnRescueDelaySeconds = Number(settings.pathSafety.waterSpawnRescueDelaySeconds);
+      const waterSpawnRescueCooldownSeconds = Number(settings.pathSafety.waterSpawnRescueCooldownSeconds);
+      if (!Number.isNaN(waterSpawnRescueDelaySeconds)) next.pathSafety.waterSpawnRescueDelaySeconds = Math.max(1, waterSpawnRescueDelaySeconds);
+      if (!Number.isNaN(waterSpawnRescueCooldownSeconds)) next.pathSafety.waterSpawnRescueCooldownSeconds = Math.max(5, waterSpawnRescueCooldownSeconds);
     }
 
     this.behaviorSettings = next;
@@ -2110,7 +2763,6 @@ export class BotInstance {
       '!attack [hostile/all] - 自动攻击',
       '!patrol - 随机巡逻',
       '!god - 无敌模式',
-      '!mine - 自动挖矿',
       '!jump - 跳跃',
       '!sneak - 蹲下/站起',
       '!ask [问题] - 问AI'
@@ -2161,11 +2813,9 @@ export class BotInstance {
     this.modes.follow = false;
     this.modes.autoAttack = false;
     this.modes.patrol = false;
-    this.modes.mining = false;
     this.modes.antiAfk = false;
     this.modes.autoEat = false;
     this.modes.guard = false;
-    this.modes.fishing = false;
     this.modes.rateLimit = false;
     this.modes.humanize = false;
     this.modes.safeIdle = false;
@@ -2235,22 +2885,6 @@ export class BotInstance {
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
   }
 
-  cmdMine() {
-    if (!this.bot || !this.behaviors) return;
-
-    if (this.modes.mining) {
-      this.behaviors.mining.stop();
-      this.modes.mining = false;
-      this.bot.chat('停止挖矿');
-    } else {
-      this.stopConflictingModes('mining');
-      const result = this.behaviors.mining.start();
-      this.modes.mining = true;
-      this.bot.chat(result.message);
-    }
-    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
-  }
-
   cmdJump() {
     if (!this.bot || !this.behaviors) return;
     this.behaviors.action.jump();
@@ -2316,16 +2950,6 @@ export class BotInstance {
           this.modes.patrol = false;
         }
         break;
-      case 'mining':
-        if (enabled) {
-          this.stopConflictingModes('mining');
-          result = this.behaviors.mining.start(options.blocks, options);
-          this.modes.mining = true;
-        } else {
-          result = this.behaviors.mining.stop();
-          this.modes.mining = false;
-        }
-        break;
       case 'antiAfk':
         if (enabled) {
           const antiAfkOptions = { ...(this.behaviorSettings.antiAfk || {}), ...(options || {}) };
@@ -2357,17 +2981,6 @@ export class BotInstance {
           this.modes.guard = false;
         }
         break;
-      case 'fishing':
-        if (enabled) {
-          this.stopConflictingModes('fishing');
-          const fishingOptions = { ...(this.behaviorSettings.fishing || {}), ...(options || {}) };
-          result = this.behaviors.fishing.start(fishingOptions);
-          this.modes.fishing = result.success;
-        } else {
-          result = this.behaviors.fishing.stop();
-          this.modes.fishing = false;
-        }
-        break;
       case 'rateLimit':
         if (enabled) {
           const rateOptions = { ...(this.behaviorSettings.rateLimit || {}), ...(options || {}) };
@@ -2383,6 +2996,7 @@ export class BotInstance {
           const humanizeOptions = { ...(this.behaviorSettings.humanize || {}), ...(options || {}) };
           result = this.behaviors.humanize.start(humanizeOptions);
           this.modes.humanize = result.success;
+          if (result.success) this.modes.playerLike = false;
         } else {
           result = this.behaviors.humanize.stop();
           this.modes.humanize = false;
@@ -2393,9 +3007,23 @@ export class BotInstance {
           const safeIdleOptions = { ...(this.behaviorSettings.safeIdle || {}), ...(options || {}) };
           result = this.behaviors.safeIdle.start(safeIdleOptions);
           this.modes.safeIdle = result.success;
+          if (result.success) this.modes.playerLike = false;
         } else {
           result = this.behaviors.safeIdle.stop();
           this.modes.safeIdle = false;
+        }
+        break;
+      case 'playerLike':
+        if (enabled) {
+          result = this.startPlayerLikeBehaviors();
+          this.modes.playerLike = result.success;
+          if (result.success) {
+            this.modes.humanize = false;
+            this.modes.safeIdle = false;
+          }
+        } else {
+          result = this.stopPlayerLikeBehaviors();
+          this.modes.playerLike = false;
         }
         break;
       case 'workflow':

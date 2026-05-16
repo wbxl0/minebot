@@ -95,17 +95,16 @@
 - `server/routes/proxy.js`
 - `server/routes/bots.js`
 - `server/routes/files.js`
-- `server/routes/agents.js`
 - `server/routes/telegram.js`
 
 执行方案：
 1. 先无行为变更地搬运路由（不改业务逻辑）。
-2. 用依赖注入传入 `botManager/configManager/agentGateway/...`。
+2. 用依赖注入传入 `botManager/configManager/...`。
 3. 保持原 API 路径和返回结构兼容。
 
 验收命令：
 - `node --check "server/index.js"`
-- 手动 smoke：登录、读取 bots、文件列表、agent 列表 4 条接口。
+- 手动 smoke：登录、读取 bots、文件列表接口。
 
 通过标准：
 - API 行为不变，结构清晰，`index.js` 显著缩短。
@@ -192,9 +191,6 @@
 - 前端：
   - `npm run lint` 通过
   - `npm run build` 通过（主包较大告警）
-- Go agent：
-  - `go build ./...` 通过
-  - `go test ./...` 无测试文件
 - 后端语法：
   - `node --check "server/index.js"` 通过
 

@@ -56,6 +56,62 @@ import { CSS } from "@dnd-kit/utilities";
 // 使用从 api.ts 导入的 BotStatus 作为 ServerConfig 的别名，保持代码可读性
 type ServerConfig = BotStatus;
 
+const USERNAME_PREFIXES = [
+  "Amber",
+  "Pixel",
+  "Quartz",
+  "Nova",
+  "Cobalt",
+  "Azure",
+  "Lime",
+  "Iron",
+  "Copper",
+  "Slate",
+  "Swift",
+  "Bright",
+  "Lucky",
+  "Silent",
+  "North",
+  "Solar",
+  "Lunar",
+  "Echo",
+  "Frost",
+  "Flint",
+];
+
+const USERNAME_SUFFIXES = [
+  "Worker",
+  "Builder",
+  "Miner",
+  "Keeper",
+  "Runner",
+  "Scout",
+  "Pilot",
+  "Crafter",
+  "Guard",
+  "Maker",
+  "Walker",
+  "Forge",
+  "Path",
+  "Drift",
+  "Stone",
+  "Spark",
+  "Quest",
+  "Craft",
+];
+
+function normalizeMinecraftUsername(name: string) {
+  return name.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 16);
+}
+
+function generateMinecraftUsername() {
+  const prefix = USERNAME_PREFIXES[Math.floor(Math.random() * USERNAME_PREFIXES.length)];
+  const suffix = USERNAME_SUFFIXES[Math.floor(Math.random() * USERNAME_SUFFIXES.length)];
+  const digits = Math.random() < 0.35 ? String(Math.floor(Math.random() * 90) + 10) : "";
+  const name = normalizeMinecraftUsername(`${prefix}${suffix}${digits}`);
+  return name.length >= 3 ? name : `Bot${Math.floor(Math.random() * 9000) + 1000}`;
+}
+
 // 可排序服务器卡片组件
 function SortableServerCard({
   server,
@@ -91,7 +147,7 @@ function SortableServerCard({
   };
 
   const isPanel = server.type === "panel";
-  const agentOnline = server.agentStatus?.connected;
+  const playerCount = server.players?.length || 0;
 
   return (
     <div
@@ -112,18 +168,20 @@ function SortableServerCard({
       </div>
 
       {/* 状态指示灯 */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(server)}`} />
-          <Badge
-            variant={server.connected || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
-            className="text-xs"
-          >
-            {getStatusText(server)}
-          </Badge>
+      <div className="flex items-start justify-between gap-3 pr-8 mb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${getStatusColor(server)}`} />
+          {!isPanel && (
+            <Badge
+              variant={server.connected ? "default" : "secondary"}
+              className="min-w-6 justify-center px-2 text-xs shrink-0 tabular-nums"
+            >
+              {playerCount}
+            </Badge>
+          )}
         </div>
         {server.type === "panel" && server.panelServerStats && (
-          <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal">
+          <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal shrink-0">
             {formatUptime(server.panelServerStats.uptime)}
           </Badge>
         )}
@@ -235,6 +293,11 @@ export function MultiServerPanel() {
     port: "25565",
     username: "",
   });
+
+  const handleRandomUsername = useCallback(() => {
+    setNewServer(prev => ({ ...prev, username: generateMinecraftUsername() }));
+  }, []);
+
   const [selectedServer, setSelectedServer] = useState<ServerConfig | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const { toast } = useToast();
@@ -448,7 +511,6 @@ export function MultiServerPanel() {
   // 获取服务器状态颜色
   const getStatusColor = (server: ServerConfig) => {
     if (server.connected) return "bg-green-500";
-    if (server.agentStatus?.connected) return "bg-green-500";
     if (server.type === "panel" && server.tcpOnline) return "bg-green-500";
     if (server.type === "panel" && server.panelServerState === "running") return "bg-yellow-500";
     return "bg-gray-400";
@@ -457,7 +519,6 @@ export function MultiServerPanel() {
   // 获取服务器状态文字
   const getStatusText = (server: ServerConfig) => {
     if (server.connected) return "在线";
-    if (server.agentStatus?.connected) return "在线";
     if (server.type === "panel" && server.tcpOnline) return "TCP在线";
     if (server.type === "panel" && server.panelServerState === "running") return "运行中";
     if (server.type === "panel" && server.panelServerState === "starting") return "启动中";
@@ -576,11 +637,24 @@ export function MultiServerPanel() {
                             </div>
                             <div className="space-y-1">
                               <Label>用户名 (留空随机)</Label>
-                              <Input
-                                placeholder="自动生成"
-                                value={newServer.username}
-                                onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
-                              />
+                              <div className="flex gap-2">
+                                <Input
+                                  placeholder="自动生成"
+                                  value={newServer.username}
+                                  onChange={(e) => setNewServer({ ...newServer, username: e.target.value })}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={handleRandomUsername}
+                                  title="随机用户名"
+                                  aria-label="随机用户名"
+                                  className="shrink-0"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                           <div className="grid grid-cols-3 gap-3">

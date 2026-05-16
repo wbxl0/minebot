@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, ProxyNode, AgentInfo } from "@/lib/api";
+import { api, ProxyNode } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 interface BotSettingsPanelProps {
@@ -81,14 +81,6 @@ interface BehaviorStatus {
         nextWaypointIndex?: number | null;
         centerPos?: { x: number; y: number; z: number } | null;
     };
-    mining?: {
-        active: boolean;
-        targetBlocks?: string[];
-        range?: number;
-        stopOnFull?: boolean;
-        minEmptySlots?: number;
-        lastTargetBlock?: string | null;
-    };
     action?: {
         looping?: boolean;
         actionsCount?: number;
@@ -116,12 +108,6 @@ interface BehaviorStatus {
         attackRange?: number;
         minHealth?: number;
         lastTarget?: string | null;
-    };
-    fishing?: {
-        active: boolean;
-        intervalSeconds?: number;
-        timeoutSeconds?: number;
-        lastResult?: string | null;
     };
     rateLimit?: {
         active: boolean;
@@ -203,8 +189,6 @@ export function BotSettingsPanel({
     const [guardRadius, setGuardRadius] = useState<string>("8");
     const [guardAttackRange, setGuardAttackRange] = useState<string>("3");
     const [guardMinHealth, setGuardMinHealth] = useState<string>("12");
-    const [fishingInterval, setFishingInterval] = useState<string>("2");
-    const [fishingTimeout, setFishingTimeout] = useState<string>("25");
     const [rateLimitCooldown, setRateLimitCooldown] = useState<string>("1");
     const [rateLimitMaxPerMinute, setRateLimitMaxPerMinute] = useState<string>("20");
     const [humanizeInterval, setHumanizeInterval] = useState<string>("18");
@@ -213,21 +197,29 @@ export function BotSettingsPanel({
     const [humanizeStepChance, setHumanizeStepChance] = useState<string>("0.3");
     const [humanizeSneakChance, setHumanizeSneakChance] = useState<string>("0.2");
     const [humanizeSwingChance, setHumanizeSwingChance] = useState<string>("0.2");
+    const [humanizeGreetingEnabled, setHumanizeGreetingEnabled] = useState<boolean>(true);
+    const [humanizeGreetingChance, setHumanizeGreetingChance] = useState<string>("0.65");
+    const [humanizeGreetingGlobalCooldown, setHumanizeGreetingGlobalCooldown] = useState<string>("45");
+    const [humanizeGreetingPlayerCooldown, setHumanizeGreetingPlayerCooldown] = useState<string>("180");
+    const [humanizeGreetingMessagesText, setHumanizeGreetingMessagesText] = useState<string>("hi\nhello\n来了\n有人来了\n你也在这啊\n我看看\n路过一下\n在忙啥呢\n这边挺热闹\n我刚到\n别打我啊\n一起看看\n这地方不错\n我站会儿\n需要帮忙吗\n你好呀");
     const [safeIdleInterval, setSafeIdleInterval] = useState<string>("20");
     const [safeIdleLookRange, setSafeIdleLookRange] = useState<string>("6");
     const [safeIdleActionChance, setSafeIdleActionChance] = useState<string>("0.5");
     const [safeIdleTimeout, setSafeIdleTimeout] = useState<string>("45");
     const [safeIdleResumeDelay, setSafeIdleResumeDelay] = useState<string>("10");
-    const [workflowStepsText, setWorkflowStepsText] = useState<string>("mining, patrol, rest");
+    const [workflowStepsText, setWorkflowStepsText] = useState<string>("patrol, rest");
     const [workflowPatrolSeconds, setWorkflowPatrolSeconds] = useState<string>("120");
     const [workflowRestSeconds, setWorkflowRestSeconds] = useState<string>("40");
-    const [workflowMiningMaxSeconds, setWorkflowMiningMaxSeconds] = useState<string>("240");
     const [pathAvoidWater, setPathAvoidWater] = useState<boolean>(true);
     const [pathAvoidLava, setPathAvoidLava] = useState<boolean>(true);
     const [pathAvoidEdges, setPathAvoidEdges] = useState<boolean>(true);
     const [pathMaxDropDown, setPathMaxDropDown] = useState<string>("2");
     const [pathAllowSprinting, setPathAllowSprinting] = useState<boolean>(false);
     const [pathAllowParkour, setPathAllowParkour] = useState<boolean>(false);
+    const [waterSpawnRescueEnabled, setWaterSpawnRescueEnabled] = useState<boolean>(false);
+    const [waterSpawnRescueCommand, setWaterSpawnRescueCommand] = useState<string>("/spawn");
+    const [waterSpawnRescueDelaySeconds, setWaterSpawnRescueDelaySeconds] = useState<string>("8");
+    const [waterSpawnRescueCooldownSeconds, setWaterSpawnRescueCooldownSeconds] = useState<string>("60");
     const [commandAllowAll, setCommandAllowAll] = useState<boolean>(false);
     const [commandCooldownSeconds, setCommandCooldownSeconds] = useState<string>("3");
     const [commandWhitelistText, setCommandWhitelistText] = useState<string>("");
@@ -246,9 +238,6 @@ export function BotSettingsPanel({
     const [proxyNodeId, setProxyNodeId] = useState(proxyNodeIdProp || "");
     const [autoReconnect, setAutoReconnect] = useState(autoReconnectProp);
     const [proxyNodes, setProxyNodes] = useState<ProxyNode[]>([]);
-    const [agentList, setAgentList] = useState<AgentInfo[]>([]);
-    const [agentId, setAgentId] = useState<string>("");
-    const [agentToken, setAgentToken] = useState<string>("");
 
     const fetchBehaviorStatus = useCallback(async () => {
         setBehaviorLoading(true);
@@ -291,22 +280,11 @@ export function BotSettingsPanel({
         api.getProxyNodes().then(setProxyNodes).catch(console.error);
     }, []);
 
-    const loadAgents = useCallback(async () => {
-        try {
-            const result = await api.listAgents();
-            setAgentList(result.agents || []);
-        } catch (error) {
-            console.error("Failed to load agents:", error);
-        }
-    }, []);
-
     useEffect(() => {
         let active = true;
         api.getBotConfig(botId)
             .then(result => {
                 if (!active || !result?.config) return;
-                setAgentId(result.config.agentId || "");
-                setAgentToken(result.config.agentToken || "");
                 const rcon = result.config.rcon;
                 setRconEnabled(!!rcon?.enabled);
                 setRconHost(rcon?.host || "");
@@ -358,16 +336,6 @@ export function BotSettingsPanel({
                         ? String(settings.guard.minHealth)
                         : "12"
                 );
-                setFishingInterval(
-                    settings.fishing?.intervalSeconds !== undefined
-                        ? String(settings.fishing.intervalSeconds)
-                        : "2"
-                );
-                setFishingTimeout(
-                    settings.fishing?.timeoutSeconds !== undefined
-                        ? String(settings.fishing.timeoutSeconds)
-                        : "25"
-                );
                 setRateLimitCooldown(
                     settings.rateLimit?.globalCooldownSeconds !== undefined
                         ? String(settings.rateLimit.globalCooldownSeconds)
@@ -408,6 +376,27 @@ export function BotSettingsPanel({
                         ? String(settings.humanize.swingChance)
                         : "0.2"
                 );
+                setHumanizeGreetingEnabled(settings.humanize?.greetingEnabled !== false);
+                setHumanizeGreetingChance(
+                    settings.humanize?.greetingChance !== undefined
+                        ? String(settings.humanize.greetingChance)
+                        : "0.65"
+                );
+                setHumanizeGreetingGlobalCooldown(
+                    settings.humanize?.greetingGlobalCooldownSeconds !== undefined
+                        ? String(settings.humanize.greetingGlobalCooldownSeconds)
+                        : "45"
+                );
+                setHumanizeGreetingPlayerCooldown(
+                    settings.humanize?.greetingPlayerCooldownSeconds !== undefined
+                        ? String(settings.humanize.greetingPlayerCooldownSeconds)
+                        : "180"
+                );
+                setHumanizeGreetingMessagesText(
+                    Array.isArray(settings.humanize?.greetingMessages) && settings.humanize.greetingMessages.length > 0
+                        ? settings.humanize.greetingMessages.join("\n")
+                        : "hi\nhello\n来了\n有人来了\n你也在这啊\n我看看\n路过一下\n在忙啥呢\n这边挺热闹\n我刚到\n别打我啊\n一起看看\n这地方不错\n我站会儿\n需要帮忙吗\n你好呀"
+                );
                 setSafeIdleInterval(
                     settings.safeIdle?.intervalSeconds !== undefined
                         ? String(settings.safeIdle.intervalSeconds)
@@ -435,8 +424,8 @@ export function BotSettingsPanel({
                 );
                 setWorkflowStepsText(
                     settings.workflow?.steps && settings.workflow.steps.length > 0
-                        ? settings.workflow.steps.join(", ")
-                        : "mining, patrol, rest"
+                        ? settings.workflow.steps.filter(step => step !== "mining").join(", ") || "patrol, rest"
+                        : "patrol, rest"
                 );
                 setWorkflowPatrolSeconds(
                     settings.workflow?.patrolSeconds !== undefined
@@ -448,11 +437,6 @@ export function BotSettingsPanel({
                         ? String(settings.workflow.restSeconds)
                         : "40"
                 );
-                setWorkflowMiningMaxSeconds(
-                    settings.workflow?.miningMaxSeconds !== undefined
-                        ? String(settings.workflow.miningMaxSeconds)
-                        : "240"
-                );
                 setPathAvoidWater(settings.pathSafety?.avoidWater !== false);
                 setPathAvoidLava(settings.pathSafety?.avoidLava !== false);
                 setPathAvoidEdges(settings.pathSafety?.avoidEdges !== false);
@@ -463,6 +447,18 @@ export function BotSettingsPanel({
                 );
                 setPathAllowSprinting(!!settings.pathSafety?.allowSprinting);
                 setPathAllowParkour(!!settings.pathSafety?.allowParkour);
+                setWaterSpawnRescueEnabled(!!settings.pathSafety?.waterSpawnRescueEnabled);
+                setWaterSpawnRescueCommand(settings.pathSafety?.waterSpawnRescueCommand || "/spawn");
+                setWaterSpawnRescueDelaySeconds(
+                    settings.pathSafety?.waterSpawnRescueDelaySeconds !== undefined
+                        ? String(settings.pathSafety.waterSpawnRescueDelaySeconds)
+                        : "8"
+                );
+                setWaterSpawnRescueCooldownSeconds(
+                    settings.pathSafety?.waterSpawnRescueCooldownSeconds !== undefined
+                        ? String(settings.pathSafety.waterSpawnRescueCooldownSeconds)
+                        : "60"
+                );
                 const cmdSettings = result.config.commandSettings || {};
                 setCommandAllowAll(!!cmdSettings.allowAll);
                 setCommandCooldownSeconds(
@@ -482,17 +478,12 @@ export function BotSettingsPanel({
                         ? String(cmdSettings.maxPerMinute)
                         : "20"
                 );
-                loadAgents();
             })
             .catch(() => {});
         return () => {
             active = false;
         };
-    }, [botId, loadAgents]);
-
-    useEffect(() => {
-        loadAgents();
-    }, [loadAgents]);
+    }, [botId]);
 
     useEffect(() => {
         fetchBehaviorStatus();
@@ -696,34 +687,6 @@ export function BotSettingsPanel({
         }
     };
 
-    const handleResetAgent = async () => {
-        setLoading("agentReset");
-        try {
-            const result = await api.resetAgent(botId);
-            setAgentId(result.agentId || "");
-            setAgentToken(result.token || "");
-            toast({ title: "探针已重置", description: result.agentId });
-            loadAgents();
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        } finally {
-            setLoading(null);
-        }
-    };
-
-    const handleBindAgent = async () => {
-        setLoading("agentBind");
-        try {
-            await api.bindAgent(botId, agentId || null);
-            toast({ title: "探针绑定已更新" });
-            onUpdate?.();
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        } finally {
-            setLoading(null);
-        }
-    };
-
     const handleTestRcon = async () => {
         setLoading("rconTest");
         try {
@@ -771,8 +734,6 @@ export function BotSettingsPanel({
             const guardRadiusValue = Number(guardRadius);
             const guardAttackRangeValue = Number(guardAttackRange);
             const guardMinHealthValue = Number(guardMinHealth);
-            const fishingIntervalValue = Number(fishingInterval);
-            const fishingTimeoutValue = Number(fishingTimeout);
             const rateLimitCooldownValue = Number(rateLimitCooldown);
             const rateLimitMaxPerMinuteValue = Number(rateLimitMaxPerMinute);
             const humanizeIntervalValue = Number(humanizeInterval);
@@ -781,6 +742,14 @@ export function BotSettingsPanel({
             const humanizeStepChanceValue = Number(humanizeStepChance);
             const humanizeSneakChanceValue = Number(humanizeSneakChance);
             const humanizeSwingChanceValue = Number(humanizeSwingChance);
+            const humanizeGreetingChanceValue = Number(humanizeGreetingChance);
+            const humanizeGreetingGlobalCooldownValue = Number(humanizeGreetingGlobalCooldown);
+            const humanizeGreetingPlayerCooldownValue = Number(humanizeGreetingPlayerCooldown);
+            const humanizeGreetingMessages = humanizeGreetingMessagesText
+                .split("\n")
+                .map(message => message.trim())
+                .filter(message => message && !message.startsWith("/"))
+                .map(message => message.slice(0, 40));
             const safeIdleIntervalValue = Number(safeIdleInterval);
             const safeIdleLookRangeValue = Number(safeIdleLookRange);
             const safeIdleActionChanceValue = Number(safeIdleActionChance);
@@ -788,8 +757,9 @@ export function BotSettingsPanel({
             const safeIdleResumeDelayValue = Number(safeIdleResumeDelay);
             const workflowPatrolSecondsValue = Number(workflowPatrolSeconds);
             const workflowRestSecondsValue = Number(workflowRestSeconds);
-            const workflowMiningMaxSecondsValue = Number(workflowMiningMaxSeconds);
             const pathMaxDropDownValue = Number(pathMaxDropDown);
+            const waterSpawnRescueDelaySecondsValue = Number(waterSpawnRescueDelaySeconds);
+            const waterSpawnRescueCooldownSecondsValue = Number(waterSpawnRescueCooldownSeconds);
             const workflowSteps = workflowStepsText
                 .split(/[,\n]/)
                 .map(step => step.trim())
@@ -816,10 +786,6 @@ export function BotSettingsPanel({
                     attackRange: Number.isNaN(guardAttackRangeValue) ? 3 : guardAttackRangeValue,
                     minHealth: Number.isNaN(guardMinHealthValue) ? 12 : guardMinHealthValue
                 },
-                fishing: {
-                    intervalSeconds: Number.isNaN(fishingIntervalValue) ? 2 : fishingIntervalValue,
-                    timeoutSeconds: Number.isNaN(fishingTimeoutValue) ? 25 : fishingTimeoutValue
-                },
                 rateLimit: {
                     globalCooldownSeconds: Number.isNaN(rateLimitCooldownValue) ? 1 : rateLimitCooldownValue,
                     maxPerMinute: Number.isNaN(rateLimitMaxPerMinuteValue) ? 20 : rateLimitMaxPerMinuteValue
@@ -830,7 +796,12 @@ export function BotSettingsPanel({
                     actionChance: Number.isNaN(humanizeActionChanceValue) ? 0.6 : humanizeActionChanceValue,
                     stepChance: Number.isNaN(humanizeStepChanceValue) ? 0.3 : humanizeStepChanceValue,
                     sneakChance: Number.isNaN(humanizeSneakChanceValue) ? 0.2 : humanizeSneakChanceValue,
-                    swingChance: Number.isNaN(humanizeSwingChanceValue) ? 0.2 : humanizeSwingChanceValue
+                    swingChance: Number.isNaN(humanizeSwingChanceValue) ? 0.2 : humanizeSwingChanceValue,
+                    greetingEnabled: humanizeGreetingEnabled,
+                    greetingChance: Number.isNaN(humanizeGreetingChanceValue) ? 0.65 : humanizeGreetingChanceValue,
+                    greetingGlobalCooldownSeconds: Number.isNaN(humanizeGreetingGlobalCooldownValue) ? 45 : humanizeGreetingGlobalCooldownValue,
+                    greetingPlayerCooldownSeconds: Number.isNaN(humanizeGreetingPlayerCooldownValue) ? 180 : humanizeGreetingPlayerCooldownValue,
+                    greetingMessages: humanizeGreetingMessages.length > 0 ? humanizeGreetingMessages : ["hi", "hello", "来了", "有人来了", "你也在这啊", "我看看"]
                 },
                 safeIdle: {
                     intervalSeconds: Number.isNaN(safeIdleIntervalValue) ? 20 : safeIdleIntervalValue,
@@ -840,10 +811,9 @@ export function BotSettingsPanel({
                     resumeDelaySeconds: Number.isNaN(safeIdleResumeDelayValue) ? 10 : safeIdleResumeDelayValue
                 },
                 workflow: {
-                    steps: workflowSteps.length > 0 ? workflowSteps : ["mining", "patrol", "rest"],
+                    steps: workflowSteps.filter(step => step !== "mining").length > 0 ? workflowSteps.filter(step => step !== "mining") : ["patrol", "rest"],
                     patrolSeconds: Number.isNaN(workflowPatrolSecondsValue) ? 120 : workflowPatrolSecondsValue,
-                    restSeconds: Number.isNaN(workflowRestSecondsValue) ? 40 : workflowRestSecondsValue,
-                    miningMaxSeconds: Number.isNaN(workflowMiningMaxSecondsValue) ? 240 : workflowMiningMaxSecondsValue
+                    restSeconds: Number.isNaN(workflowRestSecondsValue) ? 40 : workflowRestSecondsValue
                 },
                 pathSafety: {
                     avoidWater: pathAvoidWater,
@@ -851,7 +821,11 @@ export function BotSettingsPanel({
                     avoidEdges: pathAvoidEdges,
                     maxDropDown: Number.isNaN(pathMaxDropDownValue) ? 2 : pathMaxDropDownValue,
                     allowSprinting: pathAllowSprinting,
-                    allowParkour: pathAllowParkour
+                    allowParkour: pathAllowParkour,
+                    waterSpawnRescueEnabled,
+                    waterSpawnRescueCommand: waterSpawnRescueCommand.trim() || "/spawn",
+                    waterSpawnRescueDelaySeconds: Number.isNaN(waterSpawnRescueDelaySecondsValue) ? 8 : waterSpawnRescueDelaySecondsValue,
+                    waterSpawnRescueCooldownSeconds: Number.isNaN(waterSpawnRescueCooldownSecondsValue) ? 60 : waterSpawnRescueCooldownSecondsValue
                 }
             });
 
@@ -901,77 +875,13 @@ export function BotSettingsPanel({
         return String(value);
     };
 
-    const formatList = (items?: string[]) => {
-        if (!items || items.length === 0) return "无";
-        return items.join(", ");
-    };
-
-    const resolvedAgentList = agentId && !agentList.some(agent => agent.agentId === agentId)
-        ? [...agentList, { agentId, name: agentId }]
-        : agentList;
-
-    const getAgentConfigText = () => {
-        const origin = window.location.origin;
-        const wsOrigin = origin.replace(/^http/, "ws");
-        const wsUrl = `${wsOrigin}/agent/ws`;
-        return `agentId: "${agentId || ""}"
-token: "${agentToken || ""}"
-wsUrl: "${wsUrl}"
-serverUrl: "${origin}"
-
-fileRoot: "/"
-
-rcon:
-  enabled: false
-  host: "127.0.0.1"
-  port: 25575
-  password: ""
-
-security:
-  allowActions:
-    - START
-    - STOP
-    - RESTART
-    - KILL
-    - COMMAND
-    - STATS
-    - HOST_STATS
-    - PROCESS_LIST
-    - LOGS
-    - LIST
-    - READ
-    - WRITE
-    - CHMOD
-    - MKDIR
-    - DELETE
-    - RENAME
-    - COPY
-    - COMPRESS
-    - DECOMPRESS
-    - UPLOAD_INIT
-    - UPLOAD_CHUNK
-    - UPLOAD_FINISH
-    - DOWNLOAD_INIT
-    - DOWNLOAD_CHUNK`;
-    };
-
-    const handleCopyAgentConfig = async () => {
-        try {
-            await navigator.clipboard.writeText(getAgentConfigText());
-            toast({ title: "已复制", description: "探针配置已复制" });
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        }
-    };
-
     return (
         <Tabs defaultValue="restart" className="w-full">
-            <TabsList className="grid w-full grid-cols-8">
+            <TabsList className="grid w-full grid-cols-7">
                 <TabsTrigger value="restart">通用</TabsTrigger>
                 <TabsTrigger value="chat">喊话</TabsTrigger>
                 <TabsTrigger value="behavior">行为</TabsTrigger>
                 <TabsTrigger value="command">指令</TabsTrigger>
-                <TabsTrigger value="agent">探针</TabsTrigger>
                 <TabsTrigger value="network">网络</TabsTrigger>
                 <TabsTrigger value="panel">面板</TabsTrigger>
                 <TabsTrigger value="sftp">SFTP</TabsTrigger>
@@ -1132,14 +1042,11 @@ security:
                             <div>攻击: {behaviorStatus.attack?.active ? `模式 ${formatValue(behaviorStatus.attack.mode)} | 范围 ${formatValue(behaviorStatus.attack.range)} | 血线 ${formatValue(behaviorStatus.attack.minHealth)} | 白名单 ${formatValue(behaviorStatus.attack.whitelistCount)} | 目标 ${formatValue(behaviorStatus.attack.lastTarget)}` : "未开启"}</div>
                             <div>巡逻: {behaviorStatus.patrol?.active ? `移动中 ${behaviorStatus.patrol.isMoving ? "是" : "否"} | 半径 ${formatValue(behaviorStatus.patrol.radius)} | 路径点 ${formatValue(behaviorStatus.patrol.waypointsCount)} | 下一个 ${formatValue(behaviorStatus.patrol.nextWaypointIndex)}` : "未开启"}</div>
                             <div>巡逻中心: {formatPos(behaviorStatus.patrol?.centerPos)}</div>
-                            <div>挖矿: {behaviorStatus.mining?.active ? `范围 ${formatValue(behaviorStatus.mining.range)} | 停满 ${behaviorStatus.mining.stopOnFull ? "是" : "否"} | 空位 ${formatValue(behaviorStatus.mining.minEmptySlots)} | 目标 ${formatValue(behaviorStatus.mining.lastTargetBlock)}` : "未开启"}</div>
-                            <div>挖矿目标: {formatList(behaviorStatus.mining?.targetBlocks)}</div>
                             <div>AI视角: {behaviorStatus.aiView?.active ? `范围 ${formatValue(behaviorStatus.aiView.range)} | 目标 ${formatValue(behaviorStatus.aiView.lastTarget)}` : "未开启"}</div>
                             <div>动作: {behaviorStatus.action?.looping ? `循环中 | 动作数 ${formatValue(behaviorStatus.action.actionsCount)}` : "未开启"}</div>
                             <div>防踢: {behaviorStatus.antiAfk?.active ? `间隔 ${formatValue(behaviorStatus.antiAfk.intervalSeconds)}s | 抖动 ${formatValue(behaviorStatus.antiAfk.jitterSeconds)}s | 动作 ${formatValue(behaviorStatus.antiAfk.lastAction)}` : "未开启"}</div>
                             <div>自动吃: {behaviorStatus.autoEat?.active ? `血线 ${formatValue(behaviorStatus.autoEat.minHealth)} | 饥饿 ${formatValue(behaviorStatus.autoEat.minFood)} | 食物 ${formatValue(behaviorStatus.autoEat.lastFood)}` : "未开启"}</div>
                             <div>守护: {behaviorStatus.guard?.active ? `半径 ${formatValue(behaviorStatus.guard.radius)} | 攻击距 ${formatValue(behaviorStatus.guard.attackRange)} | 血线 ${formatValue(behaviorStatus.guard.minHealth)} | 目标 ${formatValue(behaviorStatus.guard.lastTarget)}` : "未开启"}</div>
-                            <div>钓鱼: {behaviorStatus.fishing?.active ? `间隔 ${formatValue(behaviorStatus.fishing.intervalSeconds)}s | 超时 ${formatValue(behaviorStatus.fishing.timeoutSeconds)}s | 状态 ${formatValue(behaviorStatus.fishing.lastResult)}` : "未开启"}</div>
                             <div>限速: {behaviorStatus.rateLimit?.active ? `冷却 ${formatValue(behaviorStatus.rateLimit.globalCooldownSeconds)}s | 每分钟 ${formatValue(behaviorStatus.rateLimit.maxPerMinute)} | 拦截 ${formatValue(behaviorStatus.rateLimit.blockedCount)}` : "未开启"}</div>
                             <div>拟人: {behaviorStatus.humanize?.active ? `间隔 ${formatValue(behaviorStatus.humanize.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.humanize.lookRange)} | 概率 ${formatValue(behaviorStatus.humanize.actionChance)} | 动作 ${formatValue(behaviorStatus.humanize.lastAction)}` : "未开启"}</div>
                             <div>安全挂机: {behaviorStatus.safeIdle?.active ? `间隔 ${formatValue(behaviorStatus.safeIdle.intervalSeconds)}s | 视距 ${formatValue(behaviorStatus.safeIdle.lookRange)} | 超时 ${formatValue(behaviorStatus.safeIdle.timeoutSeconds)}s | 动作 ${formatValue(behaviorStatus.safeIdle.lastAction)}` : "未开启"}</div>
@@ -1255,26 +1162,6 @@ security:
                     />
                 </div>
                 <div className="space-y-2">
-                    <Label>钓鱼间隔 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="1"
-                        value={fishingInterval}
-                        onChange={(e) => setFishingInterval(e.target.value)}
-                        placeholder="2"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>钓鱼超时 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="5"
-                        value={fishingTimeout}
-                        onChange={(e) => setFishingTimeout(e.target.value)}
-                        placeholder="25"
-                    />
-                </div>
-                <div className="space-y-2">
                     <Label>限速全局冷却 (秒)</Label>
                     <Input
                         type="number"
@@ -1362,6 +1249,58 @@ security:
                         placeholder="0.2"
                     />
                 </div>
+                <div className="rounded-md border p-3 space-y-3 md:col-span-2">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label>附近玩家随机打招呼</Label>
+                            <p className="text-xs text-muted-foreground">只在拟人/生存智能模式中触发，自动过滤 / 开头的命令。</p>
+                        </div>
+                        <Switch checked={humanizeGreetingEnabled} onCheckedChange={setHumanizeGreetingEnabled} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="space-y-2">
+                            <Label>说话概率 (0-1)</Label>
+                            <Input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={humanizeGreetingChance}
+                                onChange={(e) => setHumanizeGreetingChance(e.target.value)}
+                                placeholder="0.65"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>全局冷却 (秒)</Label>
+                            <Input
+                                type="number"
+                                min="10"
+                                value={humanizeGreetingGlobalCooldown}
+                                onChange={(e) => setHumanizeGreetingGlobalCooldown(e.target.value)}
+                                placeholder="45"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>同玩家冷却 (秒)</Label>
+                            <Input
+                                type="number"
+                                min="30"
+                                value={humanizeGreetingPlayerCooldown}
+                                onChange={(e) => setHumanizeGreetingPlayerCooldown(e.target.value)}
+                                placeholder="180"
+                            />
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <Label>随机短句（一行一句）</Label>
+                        <Textarea
+                            value={humanizeGreetingMessagesText}
+                            onChange={(e) => setHumanizeGreetingMessagesText(e.target.value)}
+                            rows={5}
+                            placeholder={"hi\nhello\n来了"}
+                        />
+                    </div>
+                </div>
                 <div className="space-y-2">
                     <Label>安全挂机间隔 (秒)</Label>
                     <Input
@@ -1409,10 +1348,10 @@ security:
                     <Input
                         value={workflowStepsText}
                         onChange={(e) => setWorkflowStepsText(e.target.value)}
-                        placeholder="mining, patrol, rest"
+                        placeholder="patrol, rest"
                     />
                     <p className="text-xs text-muted-foreground">
-                        可选：mining、patrol、rest
+                        可选：patrol、rest
                     </p>
                 </div>
                 <div className="space-y-2">
@@ -1433,16 +1372,6 @@ security:
                         value={workflowRestSeconds}
                         onChange={(e) => setWorkflowRestSeconds(e.target.value)}
                         placeholder="40"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>挖矿最大时长 (秒)</Label>
-                    <Input
-                        type="number"
-                        min="30"
-                        value={workflowMiningMaxSeconds}
-                        onChange={(e) => setWorkflowMiningMaxSeconds(e.target.value)}
-                        placeholder="240"
                     />
                 </div>
                 <div className="rounded-md border p-3 space-y-3">
@@ -1476,6 +1405,45 @@ security:
                     <div className="flex items-center justify-between">
                         <Label>允许跑酷跳跃</Label>
                         <Switch checked={pathAllowParkour} onCheckedChange={setPathAllowParkour} />
+                    </div>
+                    <div className="border-t pt-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div className="space-y-1">
+                                <Label>水中自动发送救援命令</Label>
+                                <p className="text-xs text-muted-foreground">需要服务器支持该命令；默认关闭，避免误触发。</p>
+                            </div>
+                            <Switch checked={waterSpawnRescueEnabled} onCheckedChange={setWaterSpawnRescueEnabled} />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>救援命令</Label>
+                            <Input
+                                value={waterSpawnRescueCommand}
+                                onChange={(e) => setWaterSpawnRescueCommand(e.target.value)}
+                                placeholder="/spawn"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-2">
+                                <Label>触发延迟 (秒)</Label>
+                                <Input
+                                    type="number"
+                                    min="1"
+                                    value={waterSpawnRescueDelaySeconds}
+                                    onChange={(e) => setWaterSpawnRescueDelaySeconds(e.target.value)}
+                                    placeholder="8"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>冷却时间 (秒)</Label>
+                                <Input
+                                    type="number"
+                                    min="5"
+                                    value={waterSpawnRescueCooldownSeconds}
+                                    onChange={(e) => setWaterSpawnRescueCooldownSeconds(e.target.value)}
+                                    placeholder="60"
+                                />
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <Button
@@ -1563,74 +1531,6 @@ security:
                     {loading === "command" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                     保存指令设置
                 </Button>
-            </TabsContent>
-
-            <TabsContent value="agent" className="space-y-4 pt-4">
-                <div className="space-y-2">
-                    <Label>探针部署配置</Label>
-                    <Textarea
-                        value={getAgentConfigText()}
-                        readOnly
-                        rows={6}
-                        className="font-mono text-xs"
-                    />
-                    <div className="flex gap-2">
-                        <Button
-                            variant="outline"
-                            onClick={handleCopyAgentConfig}
-                            className="flex-1"
-                        >
-                            复制配置
-                        </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                        将以上配置写入探针配置文件即可连接。
-                    </p>
-                </div>
-
-                <div className="space-y-2">
-                    <Label>绑定探针 (Agent)</Label>
-                    <select
-                        className="w-full h-10 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        value={agentId}
-                        onChange={(e) => setAgentId(e.target.value)}
-                        disabled={loading === "agentBind"}
-                    >
-                        <option value="">未绑定</option>
-                        {resolvedAgentList.map(agent => (
-                            <option key={agent.agentId} value={agent.agentId}>
-                                {agent.name} ({agent.status?.connected ? "在线" : "离线"})
-                            </option>
-                        ))}
-                    </select>
-                    <p className="text-xs text-muted-foreground">
-                        绑定后将优先使用探针执行控制台、电源、文件等操作。
-                    </p>
-                    <Button
-                        onClick={handleBindAgent}
-                        disabled={loading === "agentBind"}
-                        className="w-full"
-                    >
-                        {loading === "agentBind" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                        保存绑定
-                    </Button>
-                </div>
-
-                <div className="border-t pt-4 space-y-3">
-                    <div className="space-y-2">
-                        <h4 className="text-sm font-medium">重置探针</h4>
-                        <p className="text-xs text-muted-foreground">重新生成 agentId 和 token，并同步到部署配置</p>
-                    </div>
-                    <Button
-                        variant="outline"
-                        onClick={handleResetAgent}
-                        disabled={loading === "agentReset"}
-                        className="w-full"
-                    >
-                        {loading === "agentReset" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                        重置探针
-                    </Button>
-                </div>
             </TabsContent>
 
             <TabsContent value="panel" className="space-y-4 pt-4">

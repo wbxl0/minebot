@@ -45,7 +45,6 @@ const fileStructure: FileNode[] = [
         type: "folder",
         children: [
           { name: "move.js", type: "file", description: "行走 / 跟随" },
-          { name: "dig.js", type: "file", description: "挖矿" },
           { name: "look.js", type: "file", description: "看向玩家" },
         ],
       },

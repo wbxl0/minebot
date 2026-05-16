@@ -1,7 +1,6 @@
 import express from 'express';
 import axios from 'axios';
 import cors from 'cors';
-import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
@@ -16,12 +15,9 @@ import { AuthService } from './services/AuthService.js';
 import { AuditService } from './services/AuditService.js';
 import { SystemService } from './services/SystemService.js';
 import { proxyService } from './services/ProxyService.js';
-import { AgentRegistry } from './services/AgentRegistry.js';
-import { AgentGateway } from './services/AgentGateway.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerProxyRoutes } from './routes/proxy.js';
-import { registerAgentRoutes } from './routes/agents.js';
 import { registerTelegramRoutes } from './routes/telegram.js';
 import { registerBotRoutes } from './routes/bots.js';
 import { registerFileRoutes } from './routes/files.js';
@@ -114,29 +110,6 @@ const aiService = new AIService(configManager);
 const systemService = new SystemService();
 const auditService = new AuditService();
 const botManager = new BotManager(configManager, aiService, broadcast);
-const agentRegistry = new AgentRegistry();
-const agentGateway = new AgentGateway(agentRegistry, (agentId, status) => {
-  const serverIds = [];
-  botManager.bots.forEach((bot) => {
-    if (bot?.status?.agentId === agentId) {
-      serverIds.push(bot.id);
-    }
-  });
-  broadcast('agent_status', { agentId, status, serverIds });
-});
-
-const generateAgentCredentials = () => ({
-  agentId: `agent_${crypto.randomUUID()}`,
-  token: crypto.randomBytes(32).toString('hex')
-});
-
-const getAgentIdForBot = (bot) => {
-  const agentId = bot?.status?.agentId;
-  if (!agentId) return null;
-  const status = agentGateway.getStatus(agentId);
-  if (!status.connected) return null;
-  return agentId;
-};
 
 // Initialize Proxy Service
 const initializeProxy = async () => {
@@ -184,10 +157,6 @@ app.use('/api/screenshots', express.static(join(process.cwd(), 'data', 'screensh
 const clients = new Set();
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  if (url.pathname === '/agent/ws') {
-    return agentGateway.handleUpgrade(req, socket, head);
-  }
   return wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
   });
@@ -406,18 +375,12 @@ app.get('/api/logs', (req, res) => {
   res.json(botManager.getRecentLogs());
 });
 
-registerAgentRoutes(app, { agentRegistry, agentGateway });
 registerBotRoutes(app, {
   botManager,
-  configManager,
-  agentRegistry,
-  agentGateway,
-  generateAgentCredentials
+  configManager
 });
 registerFileRoutes(app, {
-  botManager,
-  agentGateway,
-  getAgentIdForBot
+  botManager
 });
 
 // Serve frontend for all other routes
@@ -457,8 +420,14 @@ app.post('/api/webhooks/trigger', async (req, res) => {
       // 如果服务器名字有效且出现在 webhook 内容中
       if (serverName && content.includes(serverName)) {
         // 检查是否有面板配置
-        if (bot.status.pterodactyl?.url && bot.status.pterodactyl?.apiKey) {
-          const msg = `Webhook 匹配到服务器: ${bot.config.name}，正在执行开机...`;
+        const panel = bot.status.pterodactyl;
+        const hasPanelConfig = typeof bot.isPanelConfigured === 'function'
+          ? bot.isPanelConfigured()
+          : !!(panel?.url && panel?.serverId && (panel?.apiKey || panel?.cookie));
+
+        if (hasPanelConfig) {
+          const authType = panel?.authType === 'cookie' ? 'Cookie' : 'API Key';
+          const msg = `Webhook 匹配到服务器: ${bot.config.name}，正在通过 ${authType} 执行开机...`;
           console.log(`[Webhook] ${msg}`);
           broadcast('log', { type: 'success', icon: '⚡', message: msg, timestamp: new Date().toLocaleTimeString() });
 

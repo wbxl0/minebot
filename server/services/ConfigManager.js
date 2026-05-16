@@ -226,10 +226,10 @@ export class ConfigManager {
         antiAfk: false,
         autoEat: false,
         guard: false,
-        fishing: false,
         rateLimit: false,
         humanize: false,
         safeIdle: false,
+        playerLike: false,
         workflow: false
       },
       proxyNodes: [] // 全局代理节点库
@@ -407,10 +407,10 @@ export class ConfigManager {
         antiAfk: false,
         autoEat: false,
         guard: false,
-        fishing: false,
         rateLimit: false,
         humanize: false,
         safeIdle: false,
+        playerLike: false,
         workflow: false
       },
       // 独立的自动喊话配置
@@ -444,7 +444,6 @@ export class ConfigManager {
       fileAccessType: serverConfig.fileAccessType || 'pterodactyl',
       // 是否自动OP
       autoOp: serverConfig.autoOp !== false,
-      agentId: serverConfig.agentId || null,
       rcon: serverConfig.rcon || {
         enabled: false,
         host: '',
@@ -481,10 +480,6 @@ export class ConfigManager {
           minHealth: 12,
           pathCooldownMs: 800
         },
-        fishing: {
-          intervalSeconds: 2,
-          timeoutSeconds: 25
-        },
         rateLimit: {
           globalCooldownSeconds: 1,
           maxPerMinute: 20
@@ -492,10 +487,27 @@ export class ConfigManager {
         humanize: {
           intervalSeconds: 18,
           lookRange: 6,
-          actionChance: 0.6,
-          stepChance: 0.3,
-          sneakChance: 0.2,
-          swingChance: 0.2
+          actionChance: 0.75,
+          stepChance: 0.45,
+          sneakChance: 0.25,
+          swingChance: 0.25,
+          stepDurationMinMs: 450,
+          stepDurationMaxMs: 900,
+          jumpUpEnabled: true,
+          nearbyPlayerRange: 12,
+          approachPlayerRange: 10,
+          approachStopDistance: 3,
+          playerReactionIntervalSeconds: 2,
+          playerActionChance: 0.75,
+          approachChance: 0.55,
+          greetingEnabled: true,
+          greetingChance: 0.65,
+          greetingGlobalCooldownSeconds: 45,
+          greetingPlayerCooldownSeconds: 180,
+          greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀'],
+          approachGreetingMessages: ['你也来了啊', '你在这啊', '我看看你在干嘛', '这边有人啊', '哈喽', '刚过来看看'],
+          leaveGreetingMessages: ['走了啊', '回头见', '我继续逛逛', '那我先走了', '一会儿见'],
+          hurtGreetingMessages: ['别打我啊', '别别别', '干嘛打我', '我没惹你吧', '停一下停一下']
         },
         safeIdle: {
           intervalSeconds: 20,
@@ -505,10 +517,9 @@ export class ConfigManager {
           resumeDelaySeconds: 10
         },
         workflow: {
-          steps: ['mining', 'patrol', 'rest'],
+          steps: ['patrol', 'rest'],
           patrolSeconds: 120,
-          restSeconds: 40,
-          miningMaxSeconds: 240
+          restSeconds: 40
         },
         pathSafety: {
           avoidWater: true,
@@ -516,7 +527,11 @@ export class ConfigManager {
           avoidEdges: true,
           maxDropDown: 2,
           allowSprinting: false,
-          allowParkour: false
+          allowParkour: false,
+          waterSpawnRescueEnabled: false,
+          waterSpawnRescueCommand: '/spawn',
+          waterSpawnRescueDelaySeconds: 8,
+          waterSpawnRescueCooldownSeconds: 60
         }
       }
     };
@@ -546,7 +561,6 @@ export class ConfigManager {
         : { ...current.pterodactyl, ...(updates.pterodactyl || {}) },
       sftp: { ...current.sftp, ...(updates.sftp || {}) },
       rcon: { ...current.rcon, ...(updates.rcon || {}) },
-      agentId: updates.agentId !== undefined ? updates.agentId : current.agentId,
       commandSettings: { ...current.commandSettings, ...(updates.commandSettings || {}) },
       behaviorSettings: { ...current.behaviorSettings, ...(updates.behaviorSettings || {}) },
       proxyNodeId: updates.proxyNodeId !== undefined ? updates.proxyNodeId : current.proxyNodeId
