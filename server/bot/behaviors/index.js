@@ -750,6 +750,12 @@ export class GuardBehavior {
     this.lastLoggedTarget = null;
     this.lastTargetLogAt = 0;
     this.lastAttackLogAt = 0;
+    this.lastApproachLogAt = 0;
+    this.lastLowHealthLogAt = 0;
+    this.lastRetreatAt = 0;
+    this.keepFightingAtLowHealth = false;
+    this.preferredTargetId = null;
+    this.onEntityHurtBound = null;
   }
 
   start(options = {}) {
@@ -768,72 +774,110 @@ export class GuardBehavior {
     if (Number.isFinite(options.pathCooldownMs)) {
       this.pathCooldownMs = Math.max(300, options.pathCooldownMs);
     }
+    this.keepFightingAtLowHealth = options.keepFightingAtLowHealth === true;
 
     this.active = true;
-    this.interval = setInterval(() => this.tick(), 500);
+    this.bindHurtTargeting();
+    this.interval = setInterval(() => this.tick(), 350);
     return { success: true, message: '守护已开启' };
+  }
+
+  getEntityName(entity) {
+    return entity?.username || entity?.name || entity?.type || 'unknown';
+  }
+
+  getEntityId(entity) {
+    return entity?.id ?? entity?.uuid ?? null;
+  }
+
+  isHostileEntity(entity) {
+    return !!entity && entity !== this.bot?.entity && entity.type === 'hostile' && entity.position;
+  }
+
+  bindHurtTargeting() {
+    if (!this.bot?.on || this.onEntityHurtBound) return;
+    this.onEntityHurtBound = (entity) => {
+      if (!this.active || entity !== this.bot?.entity) return;
+      const target = this.findTarget();
+      this.preferredTargetId = this.getEntityId(target);
+    };
+    this.bot.on('entityHurt', this.onEntityHurtBound);
+  }
+
+  unbindHurtTargeting() {
+    if (!this.bot?.removeListener || !this.onEntityHurtBound) return;
+    this.bot.removeListener('entityHurt', this.onEntityHurtBound);
+    this.onEntityHurtBound = null;
   }
 
   findTarget() {
     if (!this.bot?.entity) return null;
     const origin = this.bot.entity.position;
+    let preferred = null;
     let nearest = null;
     let nearestDist = this.radius;
 
     for (const entity of Object.values(this.bot.entities)) {
-      if (!entity || entity === this.bot.entity) continue;
-      if (entity.type !== 'hostile') continue;
+      if (!this.isHostileEntity(entity)) continue;
       const dist = origin.distanceTo(entity.position);
+      if (dist > this.radius) continue;
+      if (this.preferredTargetId !== null && this.getEntityId(entity) === this.preferredTargetId) {
+        preferred = entity;
+      }
       if (dist > nearestDist) continue;
       nearest = entity;
       nearestDist = dist;
     }
 
-    return nearest;
+    return preferred || nearest;
   }
 
   tick() {
     if (!this.active || !this.bot?.entity) return;
-    if (typeof this.bot.health === 'number' && this.bot.health <= this.minHealth) {
-      if (this.bot?.pathfinder) this.bot.pathfinder.stop();
-      if (this.bot?.setControlState) {
-        this.bot.setControlState('sprint', false);
-        this.bot.setControlState('jump', false);
-        this.bot.setControlState('sneak', false);
-      }
-      this.autoStop('low_health');
-      return;
-    }
-
     const target = this.findTarget();
     if (!target) {
       this.lastTarget = null;
+      this.preferredTargetId = null;
       if (this.bot?.pathfinder) this.bot.pathfinder.stop();
       return;
     }
 
-    this.lastTarget = target.username || target.name || target.type || 'unknown';
+    this.lastTarget = this.getEntityName(target);
     this.logTargetFound(this.lastTarget);
     const dist = this.bot.entity.position.distanceTo(target.position);
+    const lowHealth = typeof this.bot.health === 'number' && this.bot.health <= this.minHealth;
+    if (lowHealth && !this.keepFightingAtLowHealth) {
+      if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+      this.clearCombatControls();
+      this.autoStop('low_health');
+      return;
+    }
+    if (lowHealth) {
+      this.logLowHealthDefense(this.lastTarget);
+      if (dist <= this.attackRange + 1) this.retreatFromTarget(target);
+    }
+
     if (dist > this.attackRange && this.bot?.pathfinder) {
-      if (this.bot.getControlState?.('sprint')) {
-        this.bot.setControlState('sprint', false);
-      }
+      this.clearCombatControls();
       const now = Date.now();
       if (now - this.lastPathTime < this.pathCooldownMs) {
         return;
       }
       this.lastPathTime = now;
-      const goal = new this.goals.GoalFollow(target, 1);
+      const followDistance = lowHealth ? 2 : 1;
+      const goal = new this.goals.GoalFollow(target, followDistance);
       this.bot.pathfinder.setGoal(goal, true);
-      if (this.log) this.log('info', `守护靠近敌对生物: ${this.lastTarget}，距离 ${dist.toFixed(1)} 格`, '🛡️');
+      this.logApproach(this.lastTarget, dist);
       return;
     }
 
     try {
       this.bot.lookAt(target.position.offset(0, target.height * 0.85, 0));
-      this.bot.attack(target);
-      this.logAttack(this.lastTarget);
+      if (dist <= this.attackRange + 0.8) {
+        this.bot.attack(target);
+        this.logAttack(this.lastTarget);
+      }
+      if (lowHealth) this.retreatFromTarget(target);
     } catch (e) {
       // ignore
     }
@@ -848,6 +892,52 @@ export class GuardBehavior {
     this.log('info', `守护发现敌对生物: ${targetName}`, '🛡️');
   }
 
+  logApproach(targetName, dist) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastApproachLogAt < 2500) return;
+    this.lastApproachLogAt = now;
+    this.log('info', `守护靠近敌对生物: ${targetName}，距离 ${dist.toFixed(1)} 格`, '🛡️');
+  }
+
+  logLowHealthDefense(targetName) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastLowHealthLogAt < 8000) return;
+    this.lastLowHealthLogAt = now;
+    this.log('warning', `生命值过低，继续防怪并尝试拉开距离: ${targetName}`, '🛡️');
+  }
+
+  clearCombatControls() {
+    if (!this.bot?.setControlState) return;
+    this.bot.setControlState('sprint', false);
+    this.bot.setControlState('jump', false);
+    this.bot.setControlState('sneak', false);
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
+  }
+
+  retreatFromTarget(target) {
+    if (!this.bot?.setControlState || !target?.position) return;
+    const now = Date.now();
+    if (now - this.lastRetreatAt < 900) return;
+    this.lastRetreatAt = now;
+    if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+    this.clearCombatControls();
+    this.bot.setControlState('back', true);
+    this.bot.setControlState(Math.random() < 0.5 ? 'left' : 'right', true);
+    this.bot.setControlState('jump', true);
+    const timer = setTimeout(() => {
+      if (!this.bot?.setControlState) return;
+      this.bot.setControlState('back', false);
+      this.bot.setControlState('left', false);
+      this.bot.setControlState('right', false);
+      this.bot.setControlState('jump', false);
+    }, 450);
+    timer.unref?.();
+  }
+
   logAttack(targetName) {
     if (!this.log) return;
     const now = Date.now();
@@ -859,16 +949,14 @@ export class GuardBehavior {
   autoStop(reason = 'unknown') {
     this.active = false;
     this.lastTarget = null;
+    this.preferredTargetId = null;
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
     }
+    this.unbindHurtTargeting();
     if (this.bot?.pathfinder) this.bot.pathfinder.stop();
-    if (this.bot?.setControlState) {
-      this.bot.setControlState('sprint', false);
-      this.bot.setControlState('jump', false);
-      this.bot.setControlState('sneak', false);
-    }
+    this.clearCombatControls();
     if (this.log && reason === 'low_health') {
       this.log('warning', '生命值过低，自动停止守护', '🛡️');
     }
@@ -880,11 +968,14 @@ export class GuardBehavior {
   stop() {
     this.active = false;
     this.lastTarget = null;
+    this.preferredTargetId = null;
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
     }
+    this.unbindHurtTargeting();
     if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+    this.clearCombatControls();
     return { success: true, message: '守护已关闭' };
   }
 
@@ -894,6 +985,7 @@ export class GuardBehavior {
       radius: this.radius,
       attackRange: this.attackRange,
       minHealth: this.minHealth,
+      keepFightingAtLowHealth: this.keepFightingAtLowHealth,
       lastTarget: this.lastTarget
     };
   }
@@ -1223,6 +1315,21 @@ export class HumanizeBehavior {
     return this.findNearbyPlayers(range)[0] || null;
   }
 
+  findNearestHostile(range) {
+    if (!this.bot?.entity) return null;
+    const origin = this.bot.entity.position;
+    const hostiles = Object.values(this.bot.entities || [])
+      .filter(entity => entity && entity !== this.bot.entity && entity.type === 'hostile' && entity.position)
+      .map(entity => ({
+        entity,
+        name: entity.name || entity.username || entity.type || '敌对生物',
+        distance: origin.distanceTo(entity.position)
+      }))
+      .filter(entity => entity.distance <= range)
+      .sort((a, b) => a.distance - b.distance);
+    return hostiles[0] || null;
+  }
+
   findNearbyPlayers(range) {
     const nearby = [];
     const players = Object.values(this.bot.players || {});
@@ -1268,9 +1375,14 @@ export class HumanizeBehavior {
   }
 
   lookAtPlayer(entity) {
+    this.lookAtEntity(entity);
+    this.lastAction = 'look_player';
+  }
+
+  lookAtEntity(entity) {
+    if (!entity?.position) return;
     const height = Number.isFinite(entity.height) ? entity.height * 0.85 : 1.6;
     this.bot.lookAt(entity.position.offset(0, height, 0));
-    this.lastAction = 'look_player';
   }
 
   logLookAtPlayer(username, distance, now = Date.now()) {
@@ -1390,12 +1502,20 @@ export class HumanizeBehavior {
     this.lastHurtReactionAt = now;
 
     const player = this.findNearestPlayer(this.nearbyPlayerRange);
-    if (player?.entity) this.lookAtPlayer(player.entity);
+    const hostile = this.findNearestHostile(10);
+    if (hostile?.entity) {
+      this.lookAtEntity(hostile.entity);
+    } else if (player?.entity) {
+      this.lookAtPlayer(player.entity);
+    }
     this.doBackStep();
-    if (this.log) this.log('warning', '像玩家受到攻击，后退并观察附近目标', '🧍');
+    if (this.log) {
+      const targetName = hostile?.name || player?.username || player?.entity?.username || player?.entity?.name || '未知目标';
+      this.log('warning', `像玩家受到攻击，后退并观察: ${targetName}`, '🧍');
+    }
 
-    if (now - this.lastHurtGreetingAt >= this.greetingGlobalCooldownSeconds * 1000) {
-      const username = player?.username || player?.entity?.username || player?.entity?.name || '附近玩家';
+    if (!hostile && player?.entity && now - this.lastHurtGreetingAt >= this.greetingGlobalCooldownSeconds * 1000) {
+      const username = player.username || player.entity.username || player.entity.name;
       if (this.trySceneMessage(username, this.hurtGreetingMessages, 'hurt', now)) {
         this.lastHurtGreetingAt = now;
       }

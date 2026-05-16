@@ -58,6 +58,8 @@ export class BotInstance {
     this.pendingCommandFeedback = null;
     this.commandFeedbackTimer = null;
     this.playerLikeStartedGuard = false;
+    this.playerLikeStartedAutoEat = false;
+    this.recentServerMessages = [];
 
     // 每个机器人独立的日志
     this.logs = [];
@@ -347,6 +349,107 @@ export class BotInstance {
       this.pendingCommandFeedback.sawResponse = true;
       this.log('success', `服务器反馈: ${text}`, '✅');
     }
+  }
+
+  recordServerMessage(message) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    const now = Date.now();
+    this.recentServerMessages.push({ text, at: now });
+    this.recentServerMessages = this.recentServerMessages
+      .filter(item => now - item.at <= 30000)
+      .slice(-40);
+  }
+
+  findRecentDeathMessage() {
+    const username = String(this.bot?.username || this.status.username || '').toLowerCase();
+    if (!username) return null;
+    const deathHints = [
+      'died',
+      'was slain',
+      'was shot',
+      'drowned',
+      'burned',
+      'fell',
+      'blew up',
+      'hit the ground',
+      'killed',
+      '死亡',
+      '淹死',
+      '被',
+      '杀死',
+      '射杀',
+      '摔死',
+      '烧死',
+      '炸死'
+    ];
+    for (const item of [...this.recentServerMessages].reverse()) {
+      const lower = item.text.toLowerCase();
+      if (!lower.includes(username)) continue;
+      if (deathHints.some(hint => lower.includes(hint.toLowerCase()))) return item.text;
+    }
+    return null;
+  }
+
+  getNearbyEntitiesForDeath(type, range = 12, limit = 6) {
+    if (!this.bot?.entity) return [];
+    const origin = this.bot.entity.position;
+    return Object.values(this.bot.entities || {})
+      .filter(entity => entity && entity !== this.bot.entity && entity.type === type && entity.position)
+      .map(entity => ({
+        name: entity.username || entity.name || entity.type || 'unknown',
+        distance: origin.distanceTo(entity.position)
+      }))
+      .filter(entity => entity.distance <= range)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, limit);
+  }
+
+  getDeathEnvironmentInfo() {
+    if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
+    const pos = this.bot.entity.position;
+    const feet = this.bot.blockAt(pos);
+    const head = this.bot.blockAt(pos.offset(0, 1, 0));
+    const below = this.bot.blockAt(pos.offset(0, -1, 0));
+    return {
+      position: pos,
+      feet: feet?.name || 'unknown',
+      head: head?.name || 'unknown',
+      below: below?.name || 'unknown',
+      inWater: this.isBotInWater(),
+      inLava: feet?.name === 'lava' || head?.name === 'lava'
+    };
+  }
+
+  inferDeathCause(environment, hostiles) {
+    if (environment?.inLava) return '可能死于岩浆/燃烧伤害';
+    if (environment?.inWater) return '可能死于溺水或水中无法脱离';
+    const nearest = hostiles[0];
+    if (nearest) return `可能被附近敌对生物击杀: ${nearest.name} (${nearest.distance.toFixed(1)} 格)`;
+    return '未识别到明确死因，查看服务器死亡消息或坐标环境';
+  }
+
+  logDeathDiagnostics() {
+    const environment = this.getDeathEnvironmentInfo();
+    const hostiles = this.getNearbyEntitiesForDeath('hostile');
+    const players = this.getNearbyEntitiesForDeath('player');
+    const deathMessage = this.findRecentDeathMessage();
+
+    if (deathMessage) {
+      this.log('warning', `死亡消息: ${deathMessage}`, '💀');
+    }
+    if (environment?.position) {
+      const pos = environment.position;
+      this.log('warning', `死亡坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
+      this.log('warning', `死亡环境: 脚下=${environment.feet} 头部=${environment.head} 下方=${environment.below} 水中=${environment.inWater ? '是' : '否'} 岩浆=${environment.inLava ? '是' : '否'}`, '🧭');
+    }
+    if (hostiles.length > 0) {
+      this.log('warning', `死亡附近敌对生物: ${hostiles.map(entity => `${entity.name}(${entity.distance.toFixed(1)}格)`).join(', ')}`, '🛡️');
+    }
+    if (players.length > 0) {
+      this.log('warning', `死亡附近玩家: ${players.map(entity => `${entity.name}(${entity.distance.toFixed(1)}格)`).join(', ')}`, '🧍');
+    }
+    this.log('warning', `死亡诊断: ${this.inferDeathCause(environment, hostiles)}`, '🔎');
   }
 
   // 清空本机器人的日志
@@ -965,6 +1068,7 @@ export class BotInstance {
 
         // 死亡自动重生
         this.bot.on('death', () => {
+          this.logDeathDiagnostics();
           this.log('warning', '机器人死亡，正在重生...', '💀');
           // 停止所有行为
           if (this.behaviors) {
@@ -1044,7 +1148,9 @@ export class BotInstance {
         });
 
         this.bot.on('message', (jsonMsg) => {
-          this.handleCommandFeedback(jsonMsg.toString());
+          const text = jsonMsg.toString();
+          this.recordServerMessage(text);
+          this.handleCommandFeedback(text);
         });
 
         this.bot.on('error', (err) => {
@@ -2156,6 +2262,7 @@ export class BotInstance {
     const humanizeOptions = this.behaviorSettings.humanize || {};
     const safeIdleOptions = this.behaviorSettings.safeIdle || {};
     const guardOptions = this.behaviorSettings.guard || {};
+    const autoEatOptions = this.behaviorSettings.autoEat || {};
     const humanizeResult = this.behaviors.humanize.active
       ? { success: true, message: '拟人已在运行' }
       : this.behaviors.humanize.start(humanizeOptions);
@@ -2165,14 +2272,19 @@ export class BotInstance {
     const guardWasActive = this.behaviors.guard.active;
     const guardResult = guardWasActive
       ? { success: true, message: '守护已在运行' }
-      : this.behaviors.guard.start(guardOptions);
+      : this.behaviors.guard.start({ ...guardOptions, keepFightingAtLowHealth: true });
     this.playerLikeStartedGuard = !guardWasActive && guardResult.success;
+    const autoEatWasActive = this.behaviors.autoEat.active;
+    const autoEatResult = autoEatWasActive
+      ? { success: true, message: '自动吃已在运行' }
+      : this.behaviors.autoEat.start(autoEatOptions);
+    this.playerLikeStartedAutoEat = !autoEatWasActive && autoEatResult.success;
 
-    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success) {
-      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}` };
+    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success && !autoEatResult.success) {
+      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}; ${autoEatResult.message}` };
     }
 
-    return { success: true, message: '像玩家模式已开启，已启用防怪守护' };
+    return { success: true, message: '像玩家模式已开启，已启用防怪守护和自动进食' };
   }
 
   stopPlayerLikeBehaviors() {
@@ -2182,6 +2294,10 @@ export class BotInstance {
     if (this.playerLikeStartedGuard && this.behaviors.guard.active) {
       this.behaviors.guard.stop();
       this.playerLikeStartedGuard = false;
+    }
+    if (this.playerLikeStartedAutoEat && this.behaviors.autoEat.active) {
+      this.behaviors.autoEat.stop();
+      this.playerLikeStartedAutoEat = false;
     }
     return { success: true, message: '像玩家模式已关闭' };
   }
