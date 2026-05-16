@@ -149,6 +149,12 @@ export class BotInstance {
         stepChance: 0.3,
         sneakChance: 0.2,
         swingChance: 0.2,
+        nearbyPlayerRange: 8,
+        approachPlayerRange: 7,
+        approachStopDistance: 3,
+        playerReactionIntervalSeconds: 2,
+        playerActionChance: 0.65,
+        approachChance: 0.35,
         ...(config.behaviorSettings?.humanize || {})
       },
       safeIdle: {
@@ -2273,12 +2279,24 @@ export class BotInstance {
       const stepChance = Number(settings.humanize.stepChance);
       const sneakChance = Number(settings.humanize.sneakChance);
       const swingChance = Number(settings.humanize.swingChance);
+      const nearbyPlayerRange = Number(settings.humanize.nearbyPlayerRange);
+      const approachPlayerRange = Number(settings.humanize.approachPlayerRange);
+      const approachStopDistance = Number(settings.humanize.approachStopDistance);
+      const playerReactionIntervalSeconds = Number(settings.humanize.playerReactionIntervalSeconds);
+      const playerActionChance = Number(settings.humanize.playerActionChance);
+      const approachChance = Number(settings.humanize.approachChance);
       if (!Number.isNaN(intervalSeconds)) next.humanize.intervalSeconds = Math.max(5, intervalSeconds);
       if (!Number.isNaN(lookRange)) next.humanize.lookRange = Math.max(2, lookRange);
       if (!Number.isNaN(actionChance)) next.humanize.actionChance = Math.min(1, Math.max(0, actionChance));
       if (!Number.isNaN(stepChance)) next.humanize.stepChance = Math.min(1, Math.max(0, stepChance));
       if (!Number.isNaN(sneakChance)) next.humanize.sneakChance = Math.min(1, Math.max(0, sneakChance));
       if (!Number.isNaN(swingChance)) next.humanize.swingChance = Math.min(1, Math.max(0, swingChance));
+      if (!Number.isNaN(nearbyPlayerRange)) next.humanize.nearbyPlayerRange = Math.max(3, nearbyPlayerRange);
+      if (!Number.isNaN(approachPlayerRange)) next.humanize.approachPlayerRange = Math.max(4, approachPlayerRange);
+      if (!Number.isNaN(approachStopDistance)) next.humanize.approachStopDistance = Math.max(2, approachStopDistance);
+      if (!Number.isNaN(playerReactionIntervalSeconds)) next.humanize.playerReactionIntervalSeconds = Math.max(1, playerReactionIntervalSeconds);
+      if (!Number.isNaN(playerActionChance)) next.humanize.playerActionChance = Math.min(1, Math.max(0, playerActionChance));
+      if (!Number.isNaN(approachChance)) next.humanize.approachChance = Math.min(1, Math.max(0, approachChance));
     }
 
     if (settings.safeIdle) {

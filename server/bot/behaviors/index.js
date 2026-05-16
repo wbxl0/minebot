@@ -961,11 +961,12 @@ export class RateLimitBehavior {
 }
 
 /**
- * 拟人化行为 - 轻量随机动作与视角
+ * 拟人化行为 - 轻量随机动作、附近玩家反应与短距离靠近
  */
 export class HumanizeBehavior {
-  constructor(bot, logFn = null) {
+  constructor(bot, goals = null, logFn = null) {
     this.bot = bot;
+    this.goals = goals;
     this.log = logFn;
     this.active = false;
     this.intervalSeconds = 18;
@@ -974,8 +975,19 @@ export class HumanizeBehavior {
     this.stepChance = 0.3;
     this.sneakChance = 0.2;
     this.swingChance = 0.2;
+    this.nearbyPlayerRange = 8;
+    this.approachPlayerRange = 7;
+    this.approachStopDistance = 3;
+    this.playerReactionIntervalSeconds = 2;
+    this.playerActionChance = 0.65;
+    this.approachChance = 0.35;
     this.timeout = null;
+    this.reactionInterval = null;
     this.lastAction = null;
+    this.lastReactedPlayer = null;
+    this.lastInteractionAt = 0;
+    this.lastPathAt = 0;
+    this.pathGoalActive = false;
   }
 
   start(options = {}) {
@@ -999,9 +1011,28 @@ export class HumanizeBehavior {
     if (Number.isFinite(options.swingChance)) {
       this.swingChance = Math.min(1, Math.max(0, options.swingChance));
     }
+    if (Number.isFinite(options.nearbyPlayerRange)) {
+      this.nearbyPlayerRange = Math.max(3, options.nearbyPlayerRange);
+    }
+    if (Number.isFinite(options.approachPlayerRange)) {
+      this.approachPlayerRange = Math.max(4, options.approachPlayerRange);
+    }
+    if (Number.isFinite(options.approachStopDistance)) {
+      this.approachStopDistance = Math.max(2, options.approachStopDistance);
+    }
+    if (Number.isFinite(options.playerReactionIntervalSeconds)) {
+      this.playerReactionIntervalSeconds = Math.max(1, options.playerReactionIntervalSeconds);
+    }
+    if (Number.isFinite(options.playerActionChance)) {
+      this.playerActionChance = Math.min(1, Math.max(0, options.playerActionChance));
+    }
+    if (Number.isFinite(options.approachChance)) {
+      this.approachChance = Math.min(1, Math.max(0, options.approachChance));
+    }
 
     this.active = true;
     this.scheduleNext();
+    this.startPlayerReactionLoop();
     return { success: true, message: '拟人已开启' };
   }
 
@@ -1014,6 +1045,13 @@ export class HumanizeBehavior {
       this.tick();
       this.scheduleNext();
     }, delay);
+    this.timeout.unref?.();
+  }
+
+  startPlayerReactionLoop() {
+    if (this.reactionInterval) clearInterval(this.reactionInterval);
+    this.reactionInterval = setInterval(() => this.reactToNearbyPlayer(), this.playerReactionIntervalSeconds * 1000);
+    this.reactionInterval.unref?.();
   }
 
   tick() {
@@ -1039,6 +1077,94 @@ export class HumanizeBehavior {
     this.doLook();
   }
 
+  reactToNearbyPlayer() {
+    if (!this.active || !this.bot?.entity) return;
+    const player = this.findNearestPlayer(this.nearbyPlayerRange);
+    if (!player?.entity) {
+      this.lastReactedPlayer = null;
+      return;
+    }
+
+    const distance = this.bot.entity.position.distanceTo(player.entity.position);
+    this.lookAtPlayer(player.entity);
+    this.lastReactedPlayer = player.username || player.entity.username || player.entity.name || null;
+
+    const now = Date.now();
+    if (now - this.lastInteractionAt > 5000 && Math.random() < this.playerActionChance) {
+      this.lastInteractionAt = now;
+      this.doPlayerReactionAction();
+    }
+
+    if (distance <= this.approachStopDistance) {
+      if (this.pathGoalActive && this.bot?.pathfinder) this.bot.pathfinder.stop();
+      this.pathGoalActive = false;
+      return;
+    }
+
+    if (
+      distance <= this.approachPlayerRange &&
+      now - this.lastPathAt > 7000 &&
+      Math.random() < this.approachChance &&
+      !this.bot?.pathfinder?.isMoving?.()
+    ) {
+      this.approachPlayer(player.entity);
+      this.lastPathAt = now;
+    }
+  }
+
+  findNearestPlayer(range) {
+    let nearest = null;
+    let nearestDistance = range;
+    const players = Object.values(this.bot.players || {});
+
+    for (const player of players) {
+      if (!player?.entity || player.entity === this.bot.entity) continue;
+      const username = player.username || player.entity.username || player.entity.name;
+      if (username && username === this.bot.username) continue;
+      const distance = this.bot.entity.position.distanceTo(player.entity.position);
+      if (distance <= nearestDistance) {
+        nearest = player;
+        nearestDistance = distance;
+      }
+    }
+
+    return nearest;
+  }
+
+  lookAtPlayer(entity) {
+    const height = Number.isFinite(entity.height) ? entity.height * 0.85 : 1.6;
+    this.bot.lookAt(entity.position.offset(0, height, 0));
+    this.lastAction = 'look_player';
+  }
+
+  doPlayerReactionAction() {
+    const roll = Math.random();
+    if (roll < 0.35) {
+      this.bot.swingArm();
+      this.lastAction = 'wave_player';
+    } else if (roll < 0.65) {
+      this.doSneak(450, 'sneak_player');
+    } else if (roll < 0.85) {
+      this.doJump();
+    } else if (!this.bot?.pathfinder?.isMoving?.()) {
+      this.doStep();
+      this.lastAction = 'step_player';
+    }
+  }
+
+  approachPlayer(entity) {
+    if (!this.bot?.pathfinder || !this.goals?.GoalNear || !entity?.position) return;
+    const goal = new this.goals.GoalNear(
+      entity.position.x,
+      entity.position.y,
+      entity.position.z,
+      this.approachStopDistance
+    );
+    this.bot.pathfinder.setGoal(goal, false);
+    this.pathGoalActive = true;
+    this.lastAction = 'approach_player';
+  }
+
   doLook() {
     const pos = this.bot.entity.position;
     const target = pos.offset(
@@ -1050,12 +1176,22 @@ export class HumanizeBehavior {
     this.lastAction = 'look';
   }
 
-  doSneak() {
-    this.lastAction = 'sneak';
+  doSneak(duration = 200 + Math.random() * 200, action = 'sneak') {
+    this.lastAction = action;
     this.bot.setControlState('sneak', true);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (this.bot) this.bot.setControlState('sneak', false);
-    }, 200 + Math.random() * 200);
+    }, duration);
+    timer.unref?.();
+  }
+
+  doJump() {
+    this.lastAction = 'jump_player';
+    this.bot.setControlState('jump', true);
+    const timer = setTimeout(() => {
+      if (this.bot) this.bot.setControlState('jump', false);
+    }, 250);
+    timer.unref?.();
   }
 
   doStep() {
@@ -1068,12 +1204,13 @@ export class HumanizeBehavior {
     } else {
       this.bot.setControlState(strafe, true);
     }
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (this.bot) {
         this.bot.setControlState(move, false);
         this.bot.setControlState(strafe, false);
       }
     }, 180 + Math.random() * 220);
+    timer.unref?.();
   }
 
   stop() {
@@ -1081,6 +1218,18 @@ export class HumanizeBehavior {
     if (this.timeout) {
       clearTimeout(this.timeout);
       this.timeout = null;
+    }
+    if (this.reactionInterval) {
+      clearInterval(this.reactionInterval);
+      this.reactionInterval = null;
+    }
+    if (this.pathGoalActive && this.bot?.pathfinder) {
+      this.bot.pathfinder.stop();
+      this.pathGoalActive = false;
+    }
+    if (this.bot?.setControlState) {
+      this.bot.setControlState('sneak', false);
+      this.bot.setControlState('jump', false);
     }
     return { success: true, message: '拟人已关闭' };
   }
@@ -1091,6 +1240,10 @@ export class HumanizeBehavior {
       intervalSeconds: this.intervalSeconds,
       lookRange: this.lookRange,
       actionChance: this.actionChance,
+      nearbyPlayerRange: this.nearbyPlayerRange,
+      approachPlayerRange: this.approachPlayerRange,
+      approachStopDistance: this.approachStopDistance,
+      lastReactedPlayer: this.lastReactedPlayer,
       lastAction: this.lastAction
     };
   }
@@ -1522,7 +1675,7 @@ export class BehaviorManager {
     this.autoEat = new AutoEatBehavior(bot, logFn, onAutoStop);
     this.guard = new GuardBehavior(bot, goals, logFn, onAutoStop);
     this.rateLimit = new RateLimitBehavior(bot, logFn);
-    this.humanize = new HumanizeBehavior(bot, logFn);
+    this.humanize = new HumanizeBehavior(bot, goals, logFn);
     this.safeIdle = new SafeIdleBehavior(bot, logFn);
     this.workflow = new WorkflowBehavior(bot, controller, logFn);
   }

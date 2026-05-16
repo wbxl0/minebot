@@ -491,7 +491,13 @@ export class ConfigManager {
           actionChance: 0.6,
           stepChance: 0.3,
           sneakChance: 0.2,
-          swingChance: 0.2
+          swingChance: 0.2,
+          nearbyPlayerRange: 8,
+          approachPlayerRange: 7,
+          approachStopDistance: 3,
+          playerReactionIntervalSeconds: 2,
+          playerActionChance: 0.65,
+          approachChance: 0.35
         },
         safeIdle: {
           intervalSeconds: 20,
