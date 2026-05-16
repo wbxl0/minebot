@@ -17,6 +17,8 @@ interface StatsOverviewProps {
 export function StatsOverview({ status, connected }: StatsOverviewProps) {
     const { systemStatus } = useWebSocketContext();
 
+    const currentServerPlayers = status?.players?.length || 0;
+
     // 计算所有服务器的总玩家数
     const serverPlayers = new Map<string, Set<string>>();
     status?.botList?.forEach((bot, index) => {
@@ -27,7 +29,7 @@ export function StatsOverview({ status, connected }: StatsOverviewProps) {
     });
     const totalPlayers = serverPlayers.size > 0
         ? Array.from(serverPlayers.values()).reduce((sum, players) => sum + players.size, 0)
-        : status?.players?.length || 0;
+        : currentServerPlayers;
 
     // 内存状态颜色
     const memoryPercent = systemStatus ? parseFloat(systemStatus.percent) : 0;
@@ -44,13 +46,13 @@ export function StatsOverview({ status, connected }: StatsOverviewProps) {
                 status={connected ? "online" : "offline"}
             />
 
-            {/* Bot Count */}
+            {/* Current Server Player Count */}
             <StatusCard
-                title="在线 Bot"
-                value={`${status?.connectedBots || 0} / ${status?.totalBots || 0}`}
-                description="当前活跃机器人数量"
+                title="当前服务器人数"
+                value={`${currentServerPlayers} 人`}
+                description={`${status?.connectedBots || 0} / ${status?.totalBots || 0} 个 Bot 已连接`}
                 icon={Server}
-                status="online"
+                status={currentServerPlayers > 0 ? "online" : "warning"}
             />
 
             {/* Memory Status */}
