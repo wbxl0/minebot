@@ -67,6 +67,9 @@ export class BotInstance {
     this.commandFeedbackTimer = null;
     this.playerLikeStartedGuard = false;
     this.lastDeathDiagnosticsAt = 0;
+    this.lastDeathHandledAt = 0;
+    this.lastRespawnHandledAt = 0;
+    this.respawnRequestTimer = null;
     this.lastDeathMessageLogged = null;
     this.recentServerMessages = [];
 
@@ -686,6 +689,10 @@ export class BotInstance {
       clearInterval(this.restartCommandTimer);
       this.restartCommandTimer = null;
     }
+    if (this.respawnRequestTimer) {
+      clearTimeout(this.respawnRequestTimer);
+      this.respawnRequestTimer = null;
+    }
     if (this.commandFeedbackTimer) {
       clearTimeout(this.commandFeedbackTimer);
       this.commandFeedbackTimer = null;
@@ -1120,6 +1127,7 @@ export class BotInstance {
         };
 
         this.bot = mineflayer.createBot(botOptions);
+        const activeBot = this.bot;
 
         this.connectionTimeout = setTimeout(() => {
           if (this.bot && !this.status.connected) {
@@ -1209,6 +1217,11 @@ export class BotInstance {
 
         // 死亡自动重生
         this.bot.on('death', () => {
+          if (this.bot !== activeBot) return;
+          const now = Date.now();
+          if (now - this.lastDeathHandledAt < 5000) return;
+          this.lastDeathHandledAt = now;
+
           this.logDeathDiagnostics();
           this.log('warning', '机器人死亡，正在重生...', '💀');
           // 停止所有行为
@@ -1219,33 +1232,46 @@ export class BotInstance {
               this.log('error', `停止行为失败: ${e.message}`, '❌');
             }
           }
+          if (this.respawnRequestTimer) {
+            clearTimeout(this.respawnRequestTimer);
+            this.respawnRequestTimer = null;
+          }
           // 延迟一点再重生，避免太快
           const tryRespawn = (attempt = 1) => {
-            if (!this.bot) return;
+            if (this.bot !== activeBot) return;
             try {
-              this.bot.respawn();
+              activeBot.respawn();
               this.log('info', `重生请求已发送 (尝试 ${attempt})`, '🔄');
             } catch (e) {
               this.log('error', `重生失败 (尝试 ${attempt}): ${e.message}`, '❌');
               if (attempt < 3) {
-                setTimeout(() => tryRespawn(attempt + 1), 1000);
+                this.respawnRequestTimer = setTimeout(() => tryRespawn(attempt + 1), 1000);
               }
             }
           };
-          setTimeout(() => tryRespawn(), 500);
+          this.respawnRequestTimer = setTimeout(() => tryRespawn(), 500);
         });
 
         this.bot.on('respawn', () => {
+          if (this.bot !== activeBot) return;
+          const now = Date.now();
+          if (now - this.lastRespawnHandledAt < 3000) return;
+          this.lastRespawnHandledAt = now;
+          if (this.respawnRequestTimer) {
+            clearTimeout(this.respawnRequestTimer);
+            this.respawnRequestTimer = null;
+          }
+
           this.log('info', '已重生', '✨');
           // 更新出生点
-          if (this.bot?.entity) {
-            this.spawnPosition = this.bot.entity.position.clone();
-            const pos = this.bot.entity.position;
+          if (activeBot.entity) {
+            this.spawnPosition = activeBot.entity.position.clone();
+            const pos = activeBot.entity.position;
             this.log('info', `重生坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
           }
           if (this.modes.invincible) {
             setTimeout(() => {
-              this.applyInvincibleMode();
+              if (this.bot === activeBot) this.applyInvincibleMode();
             }, 500);
           }
           if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
