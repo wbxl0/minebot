@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Folder,
   File,
@@ -99,8 +99,28 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [uploadFileName, setUploadFileName] = useState("");
   const [uploadIndex, setUploadIndex] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
+  const lastLoadErrorRef = useRef("");
 
   const { toast } = useToast();
+
+  const getFileListErrorMessage = (message?: string) => {
+    if (!message) return "无法加载文件列表";
+    if (message.includes("There was an error while communicating with the machine")) {
+      return "翼龙面板无法和 Wings 节点通信，请检查该服务器电源状态、节点状态或稍后重试。";
+    }
+    return message;
+  };
+
+  const showLoadError = (message?: string) => {
+    const description = getFileListErrorMessage(message);
+    if (lastLoadErrorRef.current === description) return;
+    lastLoadErrorRef.current = description;
+    toast({
+      title: "加载失败",
+      description,
+      variant: "destructive",
+    });
+  };
 
   // 加载文件列表
   const loadFiles = useCallback(async (path: string = currentPath) => {
@@ -115,22 +135,15 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
         });
         setFiles(sorted);
         setSelectedFiles(new Set());
+        lastLoadErrorRef.current = "";
         if (result.channel) {
           setActiveChannel(result.channel);
         }
       } else {
-        toast({
-          title: "加载失败",
-          description: result.error || "无法加载文件列表",
-          variant: "destructive",
-        });
+        showLoadError(result.error);
       }
     } catch (error) {
-      toast({
-        title: "加载失败",
-        description: error instanceof Error ? error.message : "未知错误",
-        variant: "destructive",
-      });
+      showLoadError(error instanceof Error ? error.message : "未知错误");
     } finally {
       setLoading(false);
     }
