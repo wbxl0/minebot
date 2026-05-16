@@ -420,8 +420,14 @@ app.post('/api/webhooks/trigger', async (req, res) => {
       // 如果服务器名字有效且出现在 webhook 内容中
       if (serverName && content.includes(serverName)) {
         // 检查是否有面板配置
-        if (bot.status.pterodactyl?.url && bot.status.pterodactyl?.apiKey) {
-          const msg = `Webhook 匹配到服务器: ${bot.config.name}，正在执行开机...`;
+        const panel = bot.status.pterodactyl;
+        const hasPanelConfig = typeof bot.isPanelConfigured === 'function'
+          ? bot.isPanelConfigured()
+          : !!(panel?.url && panel?.serverId && (panel?.apiKey || panel?.cookie));
+
+        if (hasPanelConfig) {
+          const authType = panel?.authType === 'cookie' ? 'Cookie' : 'API Key';
+          const msg = `Webhook 匹配到服务器: ${bot.config.name}，正在通过 ${authType} 执行开机...`;
           console.log(`[Webhook] ${msg}`);
           broadcast('log', { type: 'success', icon: '⚡', message: msg, timestamp: new Date().toLocaleTimeString() });
 
