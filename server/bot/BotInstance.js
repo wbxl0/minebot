@@ -910,6 +910,8 @@ export class BotInstance {
           // 记录出生点用于巡逻
           if (this.bot.entity) {
             this.spawnPosition = this.bot.entity.position.clone();
+            const pos = this.bot.entity.position;
+            this.log('info', `进服坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
           }
 
           try {
@@ -993,6 +995,8 @@ export class BotInstance {
           // 更新出生点
           if (this.bot?.entity) {
             this.spawnPosition = this.bot.entity.position.clone();
+            const pos = this.bot.entity.position;
+            this.log('info', `重生坐标: X=${pos.x.toFixed(1)} Y=${pos.y.toFixed(1)} Z=${pos.z.toFixed(1)}`, '📍');
           }
           if (this.modes.invincible) {
             setTimeout(() => {
