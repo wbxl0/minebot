@@ -354,16 +354,22 @@ export class BotPool {
    * Disconnect specific server
    */
   disconnect(id = 'default') {
-    return this.removeServer(id);
+    const bot = this.bots.get(id);
+    if (!bot) return false;
+    bot.disconnect();
+    this.broadcastStatus(id, bot.getStatus());
+    return true;
   }
 
   /**
    * Disconnect all servers
    */
   disconnectAll() {
-    for (const [id] of this.bots) {
-      this.removeServer(id);
+    for (const [id, bot] of this.bots) {
+      bot.disconnect();
+      this.broadcastStatus(id, bot.getStatus());
     }
+    this.broadcast('status', this.getOverallStatus());
   }
 
   /**

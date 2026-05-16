@@ -109,16 +109,17 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
               }
               break;
             }
-            case 'bot_deleted':
-              // 机器人被删除，从 Map 中移除
+            case 'bot_deleted': {
+              const payload = data.data as { id?: unknown } | undefined;
+              const id = typeof payload?.id === 'string' ? payload.id : typeof data.id === 'string' ? data.id : null;
+              if (!id) break;
               setBotUpdates(prev => {
                 const updated = new Map(prev);
-                if (typeof data.id === 'string') {
-                  updated.delete(data.id);
-                }
+                updated.delete(id);
                 return updated;
               });
               break;
+            }
             case 'system_status':
               // 系统状态更新（内存等）
               setSystemStatus(data.data as SystemStatus);
