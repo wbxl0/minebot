@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   minebot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: wbxl0/minebot:latest
     container_name: minebot-assistant
     restart: unless-stopped
     ports:
