@@ -468,6 +468,60 @@ export class BotInstance {
     };
   }
 
+  isPanelConfigured() {
+    const panel = this.status.pterodactyl;
+    if (!panel || !panel.url || !panel.serverId) return false;
+
+    if (panel.authType === 'cookie') {
+      return !!panel.cookie;
+    }
+    return !!panel.apiKey;
+  }
+
+  getPanelAuthHeaders() {
+    const panel = this.status.pterodactyl;
+    if (!panel) return {};
+
+    const headers = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    };
+
+    if (panel.authType === 'cookie') {
+      headers['Cookie'] = panel.cookie;
+      if (panel.csrfToken) {
+        headers['X-CSRF-Token'] = panel.csrfToken;
+        headers['X-Xsrf-Token'] = panel.csrfToken;
+      }
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+      headers['Referer'] = `${panel.url}/server/${panel.serverId}`;
+      headers['Origin'] = panel.url;
+    } else {
+      headers['Authorization'] = `Bearer ${panel.apiKey}`;
+    }
+
+    return headers;
+  }
+
+  getPanelHttpOptions(extraConfig = {}) {
+    const options = {
+      ...extraConfig,
+      headers: { ...this.getPanelAuthHeaders(), ...(extraConfig.headers || {}) },
+      timeout: extraConfig.timeout || 15000
+    };
+
+    if (this.config.proxyNodeId) {
+      const localPort = proxyService.getLocalPort(this.config.proxyNodeId);
+      if (localPort) {
+        const agent = new SocksProxyAgent(`socks5://127.0.0.1:${localPort}`);
+        options.httpsAgent = agent;
+        options.httpAgent = agent;
+      }
+    }
+
+    return options;
+  }
+
   cleanup() {
     if (this.activityMonitorInterval) {
       clearInterval(this.activityMonitorInterval);
@@ -1597,7 +1651,7 @@ export class BotInstance {
     }
 
     const panel = this.status.pterodactyl;
-    if (!panel || !panel.url || !panel.apiKey || !panel.serverId) {
+    if (!this.isPanelConfigured()) {
       return { success: false, message: '翼龙面板未配置' };
     }
 
@@ -1608,48 +1662,54 @@ export class BotInstance {
       'kill': '强制终止'
     };
 
-    try {
-      const url = `${panel.url}/api/client/servers/${panel.serverId}/power`;
-      this.log('info', `正在发送电源信号: ${signalNames[signal]} -> ${url}`, '⚡');
+    const urls = [
+      `${panel.url}/api/client/servers/${panel.serverId}/power`,
+      `${panel.url}/api/servers/${panel.serverId}/power`
+    ];
 
-      const response = await axios.post(url, { signal }, {
-        headers: {
-          'Authorization': `Bearer ${panel.apiKey}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 15000
-      });
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        this.log('info', `正在发送电源信号: ${signalNames[signal]} -> ${url}`, '⚡');
 
-      this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
-      return { success: true, message: `已发送: ${signalNames[signal]}` };
-    } catch (error) {
-      const status = error.response?.status;
-      const errDetail = error.response?.data?.errors?.[0]?.detail;
-      const errMsg = errDetail || error.response?.data?.message || error.message;
+        await axios.post(url, { signal }, this.getPanelHttpOptions());
 
-      // 打印调试信息到控制台
-      console.log('[Power API Debug]', {
-        url: `${panel.url}/api/client/servers/${panel.serverId}/power`,
-        status,
-        apiKeyPrefix: panel.apiKey?.substring(0, 10) + '...',
-        response: error.response?.data
-      });
-
-      let hint = '';
-      if (status === 403) {
-        hint = ' (403常见原因: 1.需要Client API Key而非Application API Key 2.API Key需在面板Account→API Credentials创建 3.检查Key是否有该服务器权限)';
-      } else if (status === 404) {
-        hint = ' (检查: 服务器ID应为短ID如c5281c3e，不是数字ID)';
-      } else if (status === 409) {
-        hint = ' (服务器状态冲突，可能已在运行或已停止)';
-      } else if (status === 401) {
-        hint = ' (API Key无效或已过期)';
+        this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
+        return { success: true, message: `已发送: ${signalNames[signal]}` };
+      } catch (error) {
+        lastError = error;
+        if (error.response?.status !== 404 || url === urls[urls.length - 1]) {
+          break;
+        }
+        this.log('warning', '标准翼龙电源接口不可用，尝试 Minerack 兼容接口', '⚡');
       }
-
-      this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
-      return { success: false, message: `${errMsg}${hint}` };
     }
+
+    const status = lastError?.response?.status;
+    const errDetail = lastError?.response?.data?.errors?.[0]?.detail;
+    const errMsg = errDetail || lastError?.response?.data?.message || lastError?.message;
+
+    console.log('[Power API Debug]', {
+      status,
+      authType: panel.authType || 'api',
+      response: lastError?.response?.data
+    });
+
+    let hint = '';
+    if (status === 403) {
+      hint = panel.authType === 'cookie'
+        ? ' (Cookie 登录已失效或账号权限不足)'
+        : ' (403常见原因: 1.需要Client API Key而非Application API Key 2.API Key需在面板Account→API Credentials创建 3.检查Key是否有该服务器权限)';
+    } else if (status === 404) {
+      hint = ' (检查: 服务器ID应为短ID如c5281c3e，或面板接口路径不兼容)';
+    } else if (status === 409) {
+      hint = ' (服务器状态冲突，可能已在运行或已停止)';
+    } else if (status === 401 || status === 419) {
+      hint = panel.authType === 'cookie' ? ' (Cookie/CSRF 已失效，请重新从面板复制)' : ' (API Key无效或已过期)';
+    }
+
+    this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
+    return { success: false, message: `${errMsg}${hint}` };
   }
 
   // ==================== 文件管理 API ====================

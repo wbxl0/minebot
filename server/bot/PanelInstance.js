@@ -519,7 +519,7 @@ export class PanelInstance {
     }
 
     const panel = this.status.pterodactyl;
-    if (!panel || !panel.url || !panel.apiKey || !panel.serverId) {
+    if (!this.isPanelConfigured()) {
       return { success: false, message: '翼龙面板未配置' };
     }
 
@@ -530,44 +530,56 @@ export class PanelInstance {
       'kill': '强制终止'
     };
 
-    try {
-      const url = `${panel.url}/api/client/servers/${panel.serverId}/power`;
-      this.log('info', `正在发送电源信号: ${signalNames[signal]}`, '⚡');
+    const urls = [
+      `${panel.url}/api/client/servers/${panel.serverId}/power`,
+      `${panel.url}/api/servers/${panel.serverId}/power`
+    ];
 
-      await axios.post(url, { signal }, this.getHttpOptions());
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        this.log('info', `正在发送电源信号: ${signalNames[signal]} -> ${url}`, '⚡');
 
-      this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
+        await axios.post(url, { signal }, this.getHttpOptions());
 
-      // Update manualStop flag
-      if (signal === 'stop' || signal === 'kill') {
-        this.autoRestart.manualStop = true;
-      } else if (signal === 'start' || signal === 'restart') {
-        this.autoRestart.manualStop = false;
-        // Reset retry count on manual start
-        this.autoRestart.retryCount = 0;
+        this.log('success', `电源信号已发送: ${signalNames[signal]}`, '⚡');
+
+        if (signal === 'stop' || signal === 'kill') {
+          this.autoRestart.manualStop = true;
+        } else if (signal === 'start' || signal === 'restart') {
+          this.autoRestart.manualStop = false;
+          this.autoRestart.retryCount = 0;
+        }
+
+        setTimeout(() => this.fetchServerStatus().catch(() => { }), 2000);
+
+        return { success: true, message: `已发送: ${signalNames[signal]}` };
+      } catch (error) {
+        lastError = error;
+        if (error.response?.status !== 404 || url === urls[urls.length - 1]) {
+          break;
+        }
+        this.log('warning', '标准翼龙电源接口不可用，尝试 Minerack 兼容接口', '⚡');
       }
-
-      // 刷新状态
-      setTimeout(() => this.fetchServerStatus().catch(() => { }), 2000);
-
-      return { success: true, message: `已发送: ${signalNames[signal]}` };
-    } catch (error) {
-      const status = error.response?.status;
-      const errDetail = error.response?.data?.errors?.[0]?.detail;
-      const errMsg = errDetail || error.response?.data?.message || error.message;
-
-      let hint = '';
-      if (status === 403) {
-        hint = ' (检查 API Key 权限)';
-      } else if (status === 404) {
-        hint = ' (检查服务器 ID)';
-      } else if (status === 409) {
-        hint = ' (服务器状态冲突)';
-      }
-
-      this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
-      return { success: false, message: `${errMsg}${hint}` };
     }
+
+    const status = lastError?.response?.status;
+    const errDetail = lastError?.response?.data?.errors?.[0]?.detail;
+    const errMsg = errDetail || lastError?.response?.data?.message || lastError?.message;
+
+    let hint = '';
+    if (status === 403) {
+      hint = panel.authType === 'cookie' ? ' (检查 Cookie 是否过期或权限不足)' : ' (检查 API Key 权限)';
+    } else if (status === 401 || status === 419) {
+      hint = panel.authType === 'cookie' ? ' (Cookie/CSRF 已失效，请重新从面板复制)' : ' (API Key 无效或已过期)';
+    } else if (status === 404) {
+      hint = ' (检查服务器 ID 或面板接口路径)';
+    } else if (status === 409) {
+      hint = ' (服务器状态冲突)';
+    }
+
+    this.log('error', `电源信号失败 [${status}]: ${errMsg}${hint}`, '✗');
+    return { success: false, message: `${errMsg}${hint}` };
   }
 
   /**
@@ -607,7 +619,6 @@ export class PanelInstance {
    * 设置翼龙面板配置
    */
   setPterodactylConfig(config) {
-    console.log('[Debug] setPterodactylConfig received:', JSON.stringify(config));
     // 如果所有字段都为空，清除配置
     const url = (config.url || '').replace(/\/$/, '');
     const apiKey = config.apiKey || '';
@@ -640,7 +651,6 @@ export class PanelInstance {
 
     // 保存配置
     if (this.configManager) {
-      console.log(`[Debug] [${this.id}] 更新服务器配置:`, JSON.stringify(this.status.pterodactyl));
       this.configManager.updateServer(this.id, {
         pterodactyl: this.status.pterodactyl === null ? null : (this.status.pterodactyl || {})
       });
