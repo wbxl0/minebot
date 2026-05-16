@@ -18,7 +18,6 @@ import {
   Zap,
   Cpu,
   Activity,
-  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -181,9 +180,8 @@ function SortableServerCard({
           </Badge>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
-            <Users className="h-3.5 w-3.5" />
-            <span>{playerCount}</span>
+          <div className="min-w-6 rounded-full bg-muted/60 px-2 py-0.5 text-center text-xs font-semibold text-muted-foreground tabular-nums">
+            {playerCount}
           </div>
           {server.type === "panel" && server.panelServerStats && (
             <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal">
