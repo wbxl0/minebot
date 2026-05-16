@@ -77,7 +77,7 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [pathHistory, setPathHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [activeChannel, setActiveChannel] = useState<'agent' | 'sftp' | 'pterodactyl' | null>(null);
+  const [activeChannel, setActiveChannel] = useState<'sftp' | 'pterodactyl' | null>(null);
 
   // 对话框状态
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -85,9 +85,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FileInfo | null>(null);
   const [newName, setNewName] = useState("");
-  const [permOpen, setPermOpen] = useState(false);
-  const [permTarget, setPermTarget] = useState<FileInfo | null>(null);
-  const [permMode, setPermMode] = useState("0644");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingFile, setEditingFile] = useState<string | null>(null);
@@ -149,13 +146,11 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
     }
   }, [serverId, currentPath, toast]);
 
-  const channelLabel = activeChannel === 'agent'
-    ? '探针'
-    : activeChannel === 'sftp'
-      ? 'SFTP'
-      : activeChannel === 'pterodactyl'
-        ? '翼龙面板'
-        : null;
+  const channelLabel = activeChannel === 'sftp'
+    ? 'SFTP'
+    : activeChannel === 'pterodactyl'
+      ? '翼龙面板'
+      : null;
 
   useEffect(() => {
     loadFiles();
@@ -323,35 +318,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
     }
   };
 
-  const handleOpenPerms = (file: FileInfo) => {
-    setPermTarget(file);
-    setPermMode(file.mode || "0644");
-    setPermOpen(true);
-  };
-
-  const handleChmod = async () => {
-    if (!permTarget) return;
-    const filePath = currentPath === "/" ? `/${permTarget.name}` : `${currentPath}/${permTarget.name}`;
-    try {
-      const result = await api.chmodFile(serverId, filePath, permMode.trim());
-      if (result.success) {
-        toast({ title: "权限已更新", variant: "success" });
-        loadFiles();
-      } else {
-        toast({ title: "修改失败", description: result.error, variant: "destructive" });
-      }
-    } catch (error) {
-      toast({
-        title: "修改失败",
-        description: error instanceof Error ? error.message : "未知错误",
-        variant: "destructive",
-      });
-    } finally {
-      setPermOpen(false);
-      setPermTarget(null);
-    }
-  };
-
   // 下载文件
   const handleDownload = async (file: FileInfo) => {
     try {
@@ -360,7 +326,7 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
       // 先检查文件访问类型
       const uploadInfo = await api.getUploadUrl(serverId);
 
-        if (uploadInfo.type === 'sftp' || uploadInfo.type === 'agent') {
+        if (uploadInfo.type === 'sftp') {
         // SFTP 模式：直接下载
         const token = localStorage.getItem('token');
         const downloadUrl = `/api/bots/${serverId}/files/download?file=${encodeURIComponent(filePath)}`;
@@ -507,7 +473,7 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
 
       const token = localStorage.getItem('token');
 
-      if (result.type === 'sftp' || result.type === 'agent') {
+      if (result.type === 'sftp') {
         // SFTP 模式：逐个上传到后端
         for (const [index, file] of uploadFiles.entries()) {
           setUploadIndex(index + 1);
@@ -815,12 +781,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                             下载
                           </DropdownMenuItem>
                         )}
-                        {file.isFile && activeChannel === 'agent' && (
-                          <DropdownMenuItem onClick={() => handleOpenPerms(file)}>
-                            <Edit3 className="h-4 w-4 mr-2" />
-                            权限
-                          </DropdownMenuItem>
-                        )}
                         <DropdownMenuItem onClick={() => handleCopy(file)}>
                           <Copy className="h-4 w-4 mr-2" />
                           复制
@@ -907,30 +867,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                 取消
               </Button>
               <Button onClick={handleRename} disabled={!newName.trim()}>
-                确定
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={permOpen} onOpenChange={setPermOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>修改权限</DialogTitle>
-              <DialogDescription>
-                {permTarget?.name}
-              </DialogDescription>
-            </DialogHeader>
-            <Input
-              placeholder="0644"
-              value={permMode}
-              onChange={(e) => setPermMode(e.target.value)}
-            />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setPermOpen(false)}>
-                取消
-              </Button>
-              <Button onClick={handleChmod} disabled={!permMode.trim()}>
                 确定
               </Button>
             </DialogFooter>
@@ -1177,12 +1113,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
                           下载
                         </DropdownMenuItem>
                       )}
-                      {file.isFile && activeChannel === 'agent' && (
-                        <DropdownMenuItem onClick={() => handleOpenPerms(file)}>
-                          <Edit3 className="h-4 w-4 mr-2" />
-                          权限
-                        </DropdownMenuItem>
-                      )}
                       <DropdownMenuItem onClick={() => handleCopy(file)}>
                         <Copy className="h-4 w-4 mr-2" />
                         复制
@@ -1270,30 +1200,6 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
               取消
             </Button>
             <Button onClick={handleRename} disabled={!newName.trim()}>
-              确定
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={permOpen} onOpenChange={setPermOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>修改权限</DialogTitle>
-            <DialogDescription>
-              {permTarget?.name}
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            placeholder="0644"
-            value={permMode}
-            onChange={(e) => setPermMode(e.target.value)}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPermOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleChmod} disabled={!permMode.trim()}>
               确定
             </Button>
           </DialogFooter>

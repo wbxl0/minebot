@@ -444,7 +444,6 @@ export class ConfigManager {
       fileAccessType: serverConfig.fileAccessType || 'pterodactyl',
       // 是否自动OP
       autoOp: serverConfig.autoOp !== false,
-      agentId: serverConfig.agentId || null,
       rcon: serverConfig.rcon || {
         enabled: false,
         host: '',
@@ -559,7 +558,6 @@ export class ConfigManager {
         : { ...current.pterodactyl, ...(updates.pterodactyl || {}) },
       sftp: { ...current.sftp, ...(updates.sftp || {}) },
       rcon: { ...current.rcon, ...(updates.rcon || {}) },
-      agentId: updates.agentId !== undefined ? updates.agentId : current.agentId,
       commandSettings: { ...current.commandSettings, ...(updates.commandSettings || {}) },
       behaviorSettings: { ...current.behaviorSettings, ...(updates.behaviorSettings || {}) },
       proxyNodeId: updates.proxyNodeId !== undefined ? updates.proxyNodeId : current.proxyNodeId

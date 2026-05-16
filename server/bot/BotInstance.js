@@ -84,8 +84,7 @@ export class BotInstance {
       sftp: config.sftp || null, // SFTP 配置
       fileAccessType: config.fileAccessType || 'pterodactyl', // 文件访问方式: 'pterodactyl' | 'sftp' | 'none'
       autoOp: config.autoOp !== false, // 默认启用自动OP
-      autoReconnect: config.autoReconnect || false, // 对有需要的节点开启持久重连
-      agentId: config.agentId || null
+      autoReconnect: config.autoReconnect || false // 对有需要的节点开启持久重连
     };
 
     // 从配置加载模式设置 (确保所有模式都有默认值)
@@ -1090,7 +1089,6 @@ export class BotInstance {
         fileAccessType: this.status.fileAccessType || 'pterodactyl',
         autoOp: this.status.autoOp,
         autoReconnect: this.status.autoReconnect,
-        agentId: this.status.agentId,
         behaviorSettings: this.behaviorSettings
       };
       this.config = { ...this.config, ...nextConfig };
@@ -1586,14 +1584,6 @@ export class BotInstance {
     if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
     this.saveConfig();
     return this.status.rcon;
-  }
-
-  setAgentId(agentId) {
-    this.status.agentId = agentId || null;
-    this.config.agentId = this.status.agentId;
-    if (this.onStatusChange) this.onStatusChange(this.id, this.getStatus());
-    this.saveConfig();
-    return this.status.agentId;
   }
 
   /**

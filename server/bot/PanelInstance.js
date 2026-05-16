@@ -39,8 +39,7 @@ export class PanelInstance {
       serverPort: null,
       // TCP ping 结果
       tcpOnline: null, // true/false/null(未检测)
-      tcpLatency: null, // 延迟毫秒
-      agentId: config.agentId || null
+      tcpLatency: null // 延迟毫秒
     };
 
     // Auto Restart Logic

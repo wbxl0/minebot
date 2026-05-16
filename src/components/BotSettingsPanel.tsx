@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, ProxyNode, AgentInfo } from "@/lib/api";
+import { api, ProxyNode } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 interface BotSettingsPanelProps {
@@ -238,9 +238,6 @@ export function BotSettingsPanel({
     const [proxyNodeId, setProxyNodeId] = useState(proxyNodeIdProp || "");
     const [autoReconnect, setAutoReconnect] = useState(autoReconnectProp);
     const [proxyNodes, setProxyNodes] = useState<ProxyNode[]>([]);
-    const [agentList, setAgentList] = useState<AgentInfo[]>([]);
-    const [agentId, setAgentId] = useState<string>("");
-    const [agentToken, setAgentToken] = useState<string>("");
 
     const fetchBehaviorStatus = useCallback(async () => {
         setBehaviorLoading(true);
@@ -283,22 +280,11 @@ export function BotSettingsPanel({
         api.getProxyNodes().then(setProxyNodes).catch(console.error);
     }, []);
 
-    const loadAgents = useCallback(async () => {
-        try {
-            const result = await api.listAgents();
-            setAgentList(result.agents || []);
-        } catch (error) {
-            console.error("Failed to load agents:", error);
-        }
-    }, []);
-
     useEffect(() => {
         let active = true;
         api.getBotConfig(botId)
             .then(result => {
                 if (!active || !result?.config) return;
-                setAgentId(result.config.agentId || "");
-                setAgentToken(result.config.agentToken || "");
                 const rcon = result.config.rcon;
                 setRconEnabled(!!rcon?.enabled);
                 setRconHost(rcon?.host || "");
@@ -492,17 +478,12 @@ export function BotSettingsPanel({
                         ? String(cmdSettings.maxPerMinute)
                         : "20"
                 );
-                loadAgents();
             })
             .catch(() => {});
         return () => {
             active = false;
         };
-    }, [botId, loadAgents]);
-
-    useEffect(() => {
-        loadAgents();
-    }, [loadAgents]);
+    }, [botId]);
 
     useEffect(() => {
         fetchBehaviorStatus();
@@ -706,34 +687,6 @@ export function BotSettingsPanel({
         }
     };
 
-    const handleResetAgent = async () => {
-        setLoading("agentReset");
-        try {
-            const result = await api.resetAgent(botId);
-            setAgentId(result.agentId || "");
-            setAgentToken(result.token || "");
-            toast({ title: "探针已重置", description: result.agentId });
-            loadAgents();
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        } finally {
-            setLoading(null);
-        }
-    };
-
-    const handleBindAgent = async () => {
-        setLoading("agentBind");
-        try {
-            await api.bindAgent(botId, agentId || null);
-            toast({ title: "探针绑定已更新" });
-            onUpdate?.();
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        } finally {
-            setLoading(null);
-        }
-    };
-
     const handleTestRcon = async () => {
         setLoading("rconTest");
         try {
@@ -922,72 +875,13 @@ export function BotSettingsPanel({
         return String(value);
     };
 
-    const resolvedAgentList = agentId && !agentList.some(agent => agent.agentId === agentId)
-        ? [...agentList, { agentId, name: agentId }]
-        : agentList;
-
-    const getAgentConfigText = () => {
-        const origin = window.location.origin;
-        const wsOrigin = origin.replace(/^http/, "ws");
-        const wsUrl = `${wsOrigin}/agent/ws`;
-        return `agentId: "${agentId || ""}"
-token: "${agentToken || ""}"
-wsUrl: "${wsUrl}"
-serverUrl: "${origin}"
-
-fileRoot: "/"
-
-rcon:
-  enabled: false
-  host: "127.0.0.1"
-  port: 25575
-  password: ""
-
-security:
-  allowActions:
-    - START
-    - STOP
-    - RESTART
-    - KILL
-    - COMMAND
-    - STATS
-    - HOST_STATS
-    - PROCESS_LIST
-    - LOGS
-    - LIST
-    - READ
-    - WRITE
-    - CHMOD
-    - MKDIR
-    - DELETE
-    - RENAME
-    - COPY
-    - COMPRESS
-    - DECOMPRESS
-    - UPLOAD_INIT
-    - UPLOAD_CHUNK
-    - UPLOAD_FINISH
-    - DOWNLOAD_INIT
-    - DOWNLOAD_CHUNK`;
-    };
-
-    const handleCopyAgentConfig = async () => {
-        try {
-            await navigator.clipboard.writeText(getAgentConfigText());
-            toast({ title: "已复制", description: "探针配置已复制" });
-        } catch (error) {
-            toast({ title: "错误", description: String(error), variant: "destructive" });
-        }
-    };
-
     return (
         <Tabs defaultValue="restart" className="w-full">
-            <TabsList className="grid w-full grid-cols-8">
+            <TabsList className="grid w-full grid-cols-7">
                 <TabsTrigger value="restart">通用</TabsTrigger>
                 <TabsTrigger value="chat">喊话</TabsTrigger>
                 <TabsTrigger value="behavior">行为</TabsTrigger>
                 <TabsTrigger value="command">指令</TabsTrigger>
-                <TabsTrigger value="agent">探针</TabsTrigger>
                 <TabsTrigger value="network">网络</TabsTrigger>
                 <TabsTrigger value="panel">面板</TabsTrigger>
                 <TabsTrigger value="sftp">SFTP</TabsTrigger>
@@ -1637,74 +1531,6 @@ security:
                     {loading === "command" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                     保存指令设置
                 </Button>
-            </TabsContent>
-
-            <TabsContent value="agent" className="space-y-4 pt-4">
-                <div className="space-y-2">
-                    <Label>探针部署配置</Label>
-                    <Textarea
-                        value={getAgentConfigText()}
-                        readOnly
-                        rows={6}
-                        className="font-mono text-xs"
-                    />
-                    <div className="flex gap-2">
-                        <Button
-                            variant="outline"
-                            onClick={handleCopyAgentConfig}
-                            className="flex-1"
-                        >
-                            复制配置
-                        </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                        将以上配置写入探针配置文件即可连接。
-                    </p>
-                </div>
-
-                <div className="space-y-2">
-                    <Label>绑定探针 (Agent)</Label>
-                    <select
-                        className="w-full h-10 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        value={agentId}
-                        onChange={(e) => setAgentId(e.target.value)}
-                        disabled={loading === "agentBind"}
-                    >
-                        <option value="">未绑定</option>
-                        {resolvedAgentList.map(agent => (
-                            <option key={agent.agentId} value={agent.agentId}>
-                                {agent.name} ({agent.status?.connected ? "在线" : "离线"})
-                            </option>
-                        ))}
-                    </select>
-                    <p className="text-xs text-muted-foreground">
-                        绑定后将优先使用探针执行控制台、电源、文件等操作。
-                    </p>
-                    <Button
-                        onClick={handleBindAgent}
-                        disabled={loading === "agentBind"}
-                        className="w-full"
-                    >
-                        {loading === "agentBind" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                        保存绑定
-                    </Button>
-                </div>
-
-                <div className="border-t pt-4 space-y-3">
-                    <div className="space-y-2">
-                        <h4 className="text-sm font-medium">重置探针</h4>
-                        <p className="text-xs text-muted-foreground">重新生成 agentId 和 token，并同步到部署配置</p>
-                    </div>
-                    <Button
-                        variant="outline"
-                        onClick={handleResetAgent}
-                        disabled={loading === "agentReset"}
-                        className="w-full"
-                    >
-                        {loading === "agentReset" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                        重置探针
-                    </Button>
-                </div>
             </TabsContent>
 
             <TabsContent value="panel" className="space-y-4 pt-4">

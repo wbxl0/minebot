@@ -46,7 +46,6 @@ interface BotControlPanelProps {
   connected: boolean;
   serverType?: "minecraft" | "panel";  // 服务器类型
   panelServerState?: string;  // 面板服务器状态
-  agentOnline?: boolean;
   modes?: {
     follow?: boolean;
     autoAttack?: boolean;
@@ -179,7 +178,6 @@ export function BotControlPanel({
   connected,
   serverType = "minecraft",
   panelServerState,
-  agentOnline = false,
   modes = {},
   players = [],
   restartTimer,
@@ -337,7 +335,7 @@ export function BotControlPanel({
 
   // 纯面板服务器：只显示电源控制
   if (serverType === "panel") {
-    const panelAvailable = !!pterodactyl?.url || agentOnline;
+    const panelAvailable = !!pterodactyl?.url;
     return (
       <div className="space-y-2 mt-2">
         <div className="flex gap-2 flex-wrap">
@@ -374,7 +372,7 @@ export function BotControlPanel({
           </Button>
         </div>
         {!panelAvailable && (
-          <p className="text-xs text-muted-foreground">请先在设置中配置翼龙面板信息或绑定探针</p>
+          <p className="text-xs text-muted-foreground">请先在设置中配置翼龙面板信息</p>
         )}
       </div>
     );

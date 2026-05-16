@@ -86,15 +86,6 @@ export interface BotStatus {
   tcpLatency?: number | null;
   proxyNodeId?: string;
   autoReconnect?: boolean;
-  agentId?: string | null;
-  agentToken?: string | null;
-  agentStatus?: { connected: boolean; lastSeen: number | null } | null;
-}
-
-export interface AgentInfo {
-  agentId: string;
-  name: string;
-  status?: { connected: boolean; lastSeen: number | null };
 }
 
 export interface LogEntry {
@@ -547,33 +538,8 @@ class ApiService {
   }
 
   // Get bot config
-  async getBotConfig(id: string): Promise<{ success: boolean; config: { id: string; name: string; modes: Record<string, boolean>; autoChat: { enabled: boolean; interval: number; messages: string[] }; restartTimer: { enabled: boolean; intervalMinutes: number; nextRestart: string | null }; pterodactyl: { url: string; apiKey: string; serverId: string; authType?: 'api' | 'cookie'; cookie?: string; csrfToken?: string; autoRestart?: { enabled: boolean; maxRetries: number } } | null; rcon?: { enabled: boolean; host: string; port: number; password: string } | null; sftp: { host: string; port: number; username: string; password: string; privateKey: string; basePath: string } | null; fileAccessType: 'pterodactyl' | 'sftp' | 'none'; autoOp: boolean; agentId?: string | null; agentToken?: string | null; behaviorSettings?: { attack?: { whitelist?: string[]; minHealth?: number }; patrol?: { waypoints?: { x: number; y: number; z: number }[] }; antiAfk?: { intervalSeconds?: number; jitterSeconds?: number }; autoEat?: { minHealth?: number; minFood?: number }; guard?: { radius?: number; attackRange?: number; minHealth?: number; pathCooldownMs?: number }; rateLimit?: { globalCooldownSeconds?: number; maxPerMinute?: number }; humanize?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; stepChance?: number; sneakChance?: number; swingChance?: number; stepDurationMinMs?: number; stepDurationMaxMs?: number; jumpUpEnabled?: boolean; nearbyPlayerRange?: number; approachPlayerRange?: number; approachStopDistance?: number; playerReactionIntervalSeconds?: number; playerActionChance?: number; approachChance?: number; greetingEnabled?: boolean; greetingChance?: number; greetingGlobalCooldownSeconds?: number; greetingPlayerCooldownSeconds?: number; greetingMessages?: string[] }; safeIdle?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; timeoutSeconds?: number; resumeDelaySeconds?: number }; workflow?: { steps?: string[]; patrolSeconds?: number; restSeconds?: number }; pathSafety?: { avoidWater?: boolean; avoidLava?: boolean; avoidEdges?: boolean; maxDropDown?: number; allowSprinting?: boolean; allowParkour?: boolean; waterSpawnRescueEnabled?: boolean; waterSpawnRescueCommand?: string; waterSpawnRescueDelaySeconds?: number; waterSpawnRescueCooldownSeconds?: number } } | null; commandSettings?: { allowAll?: boolean; cooldownSeconds?: number; whitelist?: string[]; silentReject?: boolean; globalCooldownSeconds?: number; maxPerMinute?: number } | null } }> {
+  async getBotConfig(id: string): Promise<{ success: boolean; config: { id: string; name: string; modes: Record<string, boolean>; autoChat: { enabled: boolean; interval: number; messages: string[] }; restartTimer: { enabled: boolean; intervalMinutes: number; nextRestart: string | null }; pterodactyl: { url: string; apiKey: string; serverId: string; authType?: 'api' | 'cookie'; cookie?: string; csrfToken?: string; autoRestart?: { enabled: boolean; maxRetries: number } } | null; rcon?: { enabled: boolean; host: string; port: number; password: string } | null; sftp: { host: string; port: number; username: string; password: string; privateKey: string; basePath: string } | null; fileAccessType: 'pterodactyl' | 'sftp' | 'none'; autoOp: boolean; behaviorSettings?: { attack?: { whitelist?: string[]; minHealth?: number }; patrol?: { waypoints?: { x: number; y: number; z: number }[] }; antiAfk?: { intervalSeconds?: number; jitterSeconds?: number }; autoEat?: { minHealth?: number; minFood?: number }; guard?: { radius?: number; attackRange?: number; minHealth?: number; pathCooldownMs?: number }; rateLimit?: { globalCooldownSeconds?: number; maxPerMinute?: number }; humanize?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; stepChance?: number; sneakChance?: number; swingChance?: number; stepDurationMinMs?: number; stepDurationMaxMs?: number; jumpUpEnabled?: boolean; nearbyPlayerRange?: number; approachPlayerRange?: number; approachStopDistance?: number; playerReactionIntervalSeconds?: number; playerActionChance?: number; approachChance?: number; greetingEnabled?: boolean; greetingChance?: number; greetingGlobalCooldownSeconds?: number; greetingPlayerCooldownSeconds?: number; greetingMessages?: string[] }; safeIdle?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; timeoutSeconds?: number; resumeDelaySeconds?: number }; workflow?: { steps?: string[]; patrolSeconds?: number; restSeconds?: number }; pathSafety?: { avoidWater?: boolean; avoidLava?: boolean; avoidEdges?: boolean; maxDropDown?: number; allowSprinting?: boolean; allowParkour?: boolean; waterSpawnRescueEnabled?: boolean; waterSpawnRescueCommand?: string; waterSpawnRescueDelaySeconds?: number; waterSpawnRescueCooldownSeconds?: number } } | null; commandSettings?: { allowAll?: boolean; cooldownSeconds?: number; whitelist?: string[]; silentReject?: boolean; globalCooldownSeconds?: number; maxPerMinute?: number } | null } }> {
     return this.request(`/api/bots/${id}/config`);
-  }
-
-  // Agent registry
-  async listAgents(): Promise<{ success: boolean; agents: AgentInfo[] }> {
-    return this.request('/api/agents');
-  }
-
-  async createAgent(agentId: string, token: string, name?: string): Promise<{ success: boolean; agent?: { agentId: string; name: string } }> {
-    return this.request('/api/agents', {
-      method: 'POST',
-      body: JSON.stringify({ agentId, token, name })
-    });
-  }
-
-  async bindAgent(botId: string, agentId: string | null): Promise<{ success: boolean; agentId: string | null }> {
-    return this.request(`/api/bots/${botId}/agent-binding`, {
-      method: 'POST',
-      body: JSON.stringify({ agentId })
-    });
-  }
-
-  async resetAgent(botId: string): Promise<{ success: boolean; agentId: string; token: string }> {
-    return this.request(`/api/bots/${botId}/agent-reset`, {
-      method: 'POST'
-    });
   }
 
   // Update command settings for a bot
@@ -599,14 +565,6 @@ class ApiService {
     });
   }
 
-  async getAgentHostStats(agentId: string): Promise<{ success: boolean; data?: { hostname: string; uptime: number; load1: number; load5: number; load15: number; cpu: number; memTotal: number; memUsed: number; memUsedPct: number; diskTotal: number; diskUsed: number; diskUsedPct: number; netRx: number; netTx: number } }> {
-    return this.request(`/api/agents/${agentId}/host-stats`);
-  }
-
-  async getAgentProcesses(agentId: string, limit: number = 50): Promise<{ success: boolean; data?: Array<{ pid: number; name: string; cpu: number; mem: number }> }> {
-    return this.request(`/api/agents/${agentId}/processes?limit=${limit}`);
-  }
-
   // Update behavior settings for a bot
   async setBehaviorSettings(id: string, settings: { attack?: { whitelist?: string[]; minHealth?: number }; patrol?: { waypoints?: { x: number; y: number; z: number }[] }; antiAfk?: { intervalSeconds?: number; jitterSeconds?: number }; autoEat?: { minHealth?: number; minFood?: number }; guard?: { radius?: number; attackRange?: number; minHealth?: number; pathCooldownMs?: number }; rateLimit?: { globalCooldownSeconds?: number; maxPerMinute?: number }; humanize?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; stepChance?: number; sneakChance?: number; swingChance?: number; stepDurationMinMs?: number; stepDurationMaxMs?: number; jumpUpEnabled?: boolean; nearbyPlayerRange?: number; approachPlayerRange?: number; approachStopDistance?: number; playerReactionIntervalSeconds?: number; playerActionChance?: number; approachChance?: number; greetingEnabled?: boolean; greetingChance?: number; greetingGlobalCooldownSeconds?: number; greetingPlayerCooldownSeconds?: number; greetingMessages?: string[] }; safeIdle?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; timeoutSeconds?: number; resumeDelaySeconds?: number }; workflow?: { steps?: string[]; patrolSeconds?: number; restSeconds?: number }; pathSafety?: { avoidWater?: boolean; avoidLava?: boolean; avoidEdges?: boolean; maxDropDown?: number; allowSprinting?: boolean; allowParkour?: boolean; waterSpawnRescueEnabled?: boolean; waterSpawnRescueCommand?: string; waterSpawnRescueDelaySeconds?: number; waterSpawnRescueCooldownSeconds?: number } }): Promise<{ success: boolean; behaviorSettings: { attack?: { whitelist?: string[]; minHealth?: number }; patrol?: { waypoints?: { x: number; y: number; z: number }[] }; antiAfk?: { intervalSeconds?: number; jitterSeconds?: number }; autoEat?: { minHealth?: number; minFood?: number }; guard?: { radius?: number; attackRange?: number; minHealth?: number; pathCooldownMs?: number }; rateLimit?: { globalCooldownSeconds?: number; maxPerMinute?: number }; humanize?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; stepChance?: number; sneakChance?: number; swingChance?: number; stepDurationMinMs?: number; stepDurationMaxMs?: number; jumpUpEnabled?: boolean; nearbyPlayerRange?: number; approachPlayerRange?: number; approachStopDistance?: number; playerReactionIntervalSeconds?: number; playerActionChance?: number; approachChance?: number; greetingEnabled?: boolean; greetingChance?: number; greetingGlobalCooldownSeconds?: number; greetingPlayerCooldownSeconds?: number; greetingMessages?: string[] }; safeIdle?: { intervalSeconds?: number; lookRange?: number; actionChance?: number; timeoutSeconds?: number; resumeDelaySeconds?: number }; workflow?: { steps?: string[]; patrolSeconds?: number; restSeconds?: number }; pathSafety?: { avoidWater?: boolean; avoidLava?: boolean; avoidEdges?: boolean; maxDropDown?: number; allowSprinting?: boolean; allowParkour?: boolean; waterSpawnRescueEnabled?: boolean; waterSpawnRescueCommand?: string; waterSpawnRescueDelaySeconds?: number; waterSpawnRescueCooldownSeconds?: number } } }> {
     return this.request(`/api/bots/${id}/behavior-settings`, {
@@ -617,7 +575,7 @@ class ApiService {
 
   // ==================== 文件管理 API ====================
 
-  async listFiles(id: string, directory: string = '/'): Promise<{ success: boolean; files?: FileInfo[]; directory?: string; channel?: 'agent' | 'sftp' | 'pterodactyl'; error?: string }> {
+  async listFiles(id: string, directory: string = '/'): Promise<{ success: boolean; files?: FileInfo[]; directory?: string; channel?: 'sftp' | 'pterodactyl'; error?: string }> {
     return this.request(`/api/bots/${id}/files?directory=${encodeURIComponent(directory)}`);
   }
 
@@ -644,18 +602,11 @@ class ApiService {
     return response.json();
   }
 
-  async chmodFile(id: string, path: string, mode: string): Promise<{ success: boolean; message?: string; error?: string }> {
-    return this.request(`/api/bots/${id}/files/chmod`, {
-      method: 'POST',
-      body: JSON.stringify({ path, mode })
-    });
-  }
-
   async getDownloadUrl(id: string, file: string): Promise<{ success: boolean; url?: string; error?: string }> {
     return this.request(`/api/bots/${id}/files/download?file=${encodeURIComponent(file)}`);
   }
 
-  async getUploadUrl(id: string): Promise<{ success: boolean; url?: string; type?: 'sftp' | 'pterodactyl' | 'agent'; endpoint?: string; error?: string }> {
+  async getUploadUrl(id: string): Promise<{ success: boolean; url?: string; type?: 'sftp' | 'pterodactyl'; endpoint?: string; error?: string }> {
     return this.request(`/api/bots/${id}/files/upload`);
   }
 

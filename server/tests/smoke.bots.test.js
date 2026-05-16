@@ -2,17 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 
-async function startApp(botManager, agentGateway) {
+async function startApp(botManager) {
   const app = express();
   app.get('/api/bots', (req, res) => {
-    const statuses = botManager.getAllStatus();
-    const enriched = {};
-    Object.entries(statuses).forEach(([id, status]) => {
-      const agentId = status?.agentId;
-      const agentStatus = agentId ? agentGateway.getStatus(agentId) : null;
-      enriched[id] = { ...status, agentStatus };
-    });
-    res.json(enriched);
+    res.json(botManager.getAllStatus());
   });
 
   return new Promise((resolve) => {
@@ -26,30 +19,23 @@ async function startApp(botManager, agentGateway) {
   });
 }
 
-test('bots smoke: list endpoint returns enriched bot statuses', async () => {
+test('bots smoke: list endpoint returns bot statuses', async () => {
   const botManager = {
     getAllStatus() {
       return {
-        s1: { id: 's1', connected: true, agentId: 'agent_1' },
+        s1: { id: 's1', connected: true },
         s2: { id: 's2', connected: false }
       };
     }
   };
 
-  const agentGateway = {
-    getStatus(agentId) {
-      return { connected: agentId === 'agent_1' };
-    }
-  };
-
-  const app = await startApp(botManager, agentGateway);
+  const app = await startApp(botManager);
   const response = await fetch(`${app.baseUrl}/api/bots`);
   const json = await response.json();
 
   assert.equal(response.status, 200);
   assert.equal(json.s1.connected, true);
-  assert.equal(json.s1.agentStatus.connected, true);
-  assert.equal(json.s2.agentStatus, null);
+  assert.equal(json.s2.connected, false);
 
   await app.close();
 });

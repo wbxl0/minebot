@@ -1,47 +1,27 @@
 export function registerBotRoutes(app, {
   botManager,
-  configManager,
-  agentRegistry,
-  agentGateway,
-  generateAgentCredentials
+  configManager
 }) {
   // ===== Multi-Server APIs =====
 
   // Get all bots status
   app.get('/api/bots', (req, res) => {
-    const statuses = botManager.getAllStatus();
-    const enriched = {};
-    Object.entries(statuses).forEach(([id, status]) => {
-      const agentId = status?.agentId;
-      const agentStatus = agentId ? agentGateway.getStatus(agentId) : null;
-      enriched[id] = { ...status, agentStatus };
-    });
-    res.json(enriched);
+    res.json(botManager.getAllStatus());
   });
 
   // Add new server
   app.post('/api/bots/add', async (req, res) => {
     try {
       let serverConfig;
-      let created = false;
-      let agentPayload = null;
       try {
         serverConfig = configManager.addServer(req.body);
-        created = true;
       } catch (e) {
         const servers = configManager.getServers();
         serverConfig = servers.find(s => s.id === req.body.id) || req.body;
       }
 
-      if (created && !serverConfig.agentId) {
-        const generated = generateAgentCredentials();
-        configManager.updateServer(serverConfig.id, { agentId: generated.agentId });
-        agentRegistry.upsert({ agentId: generated.agentId, token: generated.token, name: generated.agentId });
-        agentPayload = generated;
-        serverConfig = { ...serverConfig, agentId: generated.agentId };
-      }
       const result = await botManager.addServer(serverConfig);
-      res.json({ success: true, ...result, agent: agentPayload });
+      res.json({ success: true, ...result });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
     }
@@ -406,47 +386,6 @@ export function registerBotRoutes(app, {
     }
   });
 
-  app.post('/api/bots/:id/agent-binding', (req, res) => {
-    try {
-      const bot = botManager.bots.get(req.params.id);
-      if (!bot) {
-        return res.status(404).json({ success: false, error: 'Bot not found' });
-      }
-      const { agentId } = req.body || {};
-      const result = bot.setAgentId(agentId || null);
-      res.json({ success: true, agentId: result });
-    } catch (error) {
-      res.status(400).json({ success: false, error: error.message });
-    }
-  });
-
-  app.post('/api/bots/:id/agent-reset', (req, res) => {
-    try {
-      const bot = botManager.bots.get(req.params.id);
-      if (!bot) {
-        return res.status(404).json({ success: false, error: 'Bot not found' });
-      }
-
-      const oldAgentId = bot.status.agentId;
-      if (oldAgentId) {
-        agentRegistry.remove(oldAgentId);
-      }
-
-      const generated = generateAgentCredentials();
-      configManager.updateServer(bot.id, { agentId: generated.agentId });
-      agentRegistry.upsert({ agentId: generated.agentId, token: generated.token, name: bot.status.serverName || generated.agentId });
-      if (typeof bot.setAgentId === 'function') {
-        bot.setAgentId(generated.agentId);
-      } else {
-        bot.status.agentId = generated.agentId;
-      }
-
-      res.json({ success: true, agentId: generated.agentId, token: generated.token });
-    } catch (error) {
-      res.status(400).json({ success: false, error: error.message });
-    }
-  });
-
   app.post('/api/bots/:id/rcon-test', async (req, res) => {
     try {
       const bot = botManager.bots.get(req.params.id);
@@ -528,19 +467,6 @@ export function registerBotRoutes(app, {
       if (!bot) {
         return res.status(404).json({ success: false, error: 'Bot not found' });
       }
-      if (!bot.status.agentId) {
-        const generated = generateAgentCredentials();
-        configManager.updateServer(bot.id, { agentId: generated.agentId });
-        agentRegistry.upsert({ agentId: generated.agentId, token: generated.token, name: bot.status.serverName || generated.agentId });
-        if (typeof bot.setAgentId === 'function') {
-          bot.setAgentId(generated.agentId);
-        } else {
-          bot.status.agentId = generated.agentId;
-        }
-      }
-      const agentToken = bot.status.agentId
-        ? agentRegistry.get(bot.status.agentId)?.token || null
-        : null;
       res.json({
         success: true,
         config: {
@@ -554,8 +480,6 @@ export function registerBotRoutes(app, {
           sftp: bot.status.sftp,
           fileAccessType: bot.status.fileAccessType,
           autoOp: bot.status.autoOp,
-          agentId: bot.status.agentId,
-          agentToken,
           behaviorSettings: bot.behaviorSettings || null,
           commandSettings: bot.commandSettings || null
         }

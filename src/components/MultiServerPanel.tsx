@@ -147,7 +147,6 @@ function SortableServerCard({
   };
 
   const isPanel = server.type === "panel";
-  const agentOnline = server.agentStatus?.connected;
   const playerCount = server.players?.length || 0;
 
   return (
@@ -173,7 +172,7 @@ function SortableServerCard({
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${getStatusColor(server)}`} />
           <Badge
-            variant={server.connected || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
+            variant={server.connected || (server.type === "panel" && server.tcpOnline) ? "default" : "secondary"}
             className="min-w-6 justify-center px-2 text-xs shrink-0 tabular-nums"
           >
             {playerCount}
@@ -510,7 +509,6 @@ export function MultiServerPanel() {
   // 获取服务器状态颜色
   const getStatusColor = (server: ServerConfig) => {
     if (server.connected) return "bg-green-500";
-    if (server.agentStatus?.connected) return "bg-green-500";
     if (server.type === "panel" && server.tcpOnline) return "bg-green-500";
     if (server.type === "panel" && server.panelServerState === "running") return "bg-yellow-500";
     return "bg-gray-400";
@@ -519,7 +517,6 @@ export function MultiServerPanel() {
   // 获取服务器状态文字
   const getStatusText = (server: ServerConfig) => {
     if (server.connected) return "在线";
-    if (server.agentStatus?.connected) return "在线";
     if (server.type === "panel" && server.tcpOnline) return "TCP在线";
     if (server.type === "panel" && server.panelServerState === "running") return "运行中";
     if (server.type === "panel" && server.panelServerState === "starting") return "启动中";
