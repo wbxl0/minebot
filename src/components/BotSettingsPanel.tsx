@@ -197,6 +197,11 @@ export function BotSettingsPanel({
     const [humanizeStepChance, setHumanizeStepChance] = useState<string>("0.3");
     const [humanizeSneakChance, setHumanizeSneakChance] = useState<string>("0.2");
     const [humanizeSwingChance, setHumanizeSwingChance] = useState<string>("0.2");
+    const [humanizeGreetingEnabled, setHumanizeGreetingEnabled] = useState<boolean>(true);
+    const [humanizeGreetingChance, setHumanizeGreetingChance] = useState<string>("0.35");
+    const [humanizeGreetingGlobalCooldown, setHumanizeGreetingGlobalCooldown] = useState<string>("75");
+    const [humanizeGreetingPlayerCooldown, setHumanizeGreetingPlayerCooldown] = useState<string>("240");
+    const [humanizeGreetingMessagesText, setHumanizeGreetingMessagesText] = useState<string>("hi\nhello\n来了\n有人来了\n你也在这啊\n我看看\n路过一下\n在忙啥呢\n这边挺热闹\n我刚到\n别打我啊\n一起看看\n这地方不错\n我站会儿\n需要帮忙吗\n你好呀");
     const [safeIdleInterval, setSafeIdleInterval] = useState<string>("20");
     const [safeIdleLookRange, setSafeIdleLookRange] = useState<string>("6");
     const [safeIdleActionChance, setSafeIdleActionChance] = useState<string>("0.5");
@@ -384,6 +389,27 @@ export function BotSettingsPanel({
                     settings.humanize?.swingChance !== undefined
                         ? String(settings.humanize.swingChance)
                         : "0.2"
+                );
+                setHumanizeGreetingEnabled(settings.humanize?.greetingEnabled !== false);
+                setHumanizeGreetingChance(
+                    settings.humanize?.greetingChance !== undefined
+                        ? String(settings.humanize.greetingChance)
+                        : "0.35"
+                );
+                setHumanizeGreetingGlobalCooldown(
+                    settings.humanize?.greetingGlobalCooldownSeconds !== undefined
+                        ? String(settings.humanize.greetingGlobalCooldownSeconds)
+                        : "75"
+                );
+                setHumanizeGreetingPlayerCooldown(
+                    settings.humanize?.greetingPlayerCooldownSeconds !== undefined
+                        ? String(settings.humanize.greetingPlayerCooldownSeconds)
+                        : "240"
+                );
+                setHumanizeGreetingMessagesText(
+                    Array.isArray(settings.humanize?.greetingMessages) && settings.humanize.greetingMessages.length > 0
+                        ? settings.humanize.greetingMessages.join("\n")
+                        : "hi\nhello\n来了\n有人来了\n你也在这啊\n我看看\n路过一下\n在忙啥呢\n这边挺热闹\n我刚到\n别打我啊\n一起看看\n这地方不错\n我站会儿\n需要帮忙吗\n你好呀"
                 );
                 setSafeIdleInterval(
                     settings.safeIdle?.intervalSeconds !== undefined
@@ -763,6 +789,14 @@ export function BotSettingsPanel({
             const humanizeStepChanceValue = Number(humanizeStepChance);
             const humanizeSneakChanceValue = Number(humanizeSneakChance);
             const humanizeSwingChanceValue = Number(humanizeSwingChance);
+            const humanizeGreetingChanceValue = Number(humanizeGreetingChance);
+            const humanizeGreetingGlobalCooldownValue = Number(humanizeGreetingGlobalCooldown);
+            const humanizeGreetingPlayerCooldownValue = Number(humanizeGreetingPlayerCooldown);
+            const humanizeGreetingMessages = humanizeGreetingMessagesText
+                .split("\n")
+                .map(message => message.trim())
+                .filter(message => message && !message.startsWith("/"))
+                .map(message => message.slice(0, 40));
             const safeIdleIntervalValue = Number(safeIdleInterval);
             const safeIdleLookRangeValue = Number(safeIdleLookRange);
             const safeIdleActionChanceValue = Number(safeIdleActionChance);
@@ -809,7 +843,12 @@ export function BotSettingsPanel({
                     actionChance: Number.isNaN(humanizeActionChanceValue) ? 0.6 : humanizeActionChanceValue,
                     stepChance: Number.isNaN(humanizeStepChanceValue) ? 0.3 : humanizeStepChanceValue,
                     sneakChance: Number.isNaN(humanizeSneakChanceValue) ? 0.2 : humanizeSneakChanceValue,
-                    swingChance: Number.isNaN(humanizeSwingChanceValue) ? 0.2 : humanizeSwingChanceValue
+                    swingChance: Number.isNaN(humanizeSwingChanceValue) ? 0.2 : humanizeSwingChanceValue,
+                    greetingEnabled: humanizeGreetingEnabled,
+                    greetingChance: Number.isNaN(humanizeGreetingChanceValue) ? 0.35 : humanizeGreetingChanceValue,
+                    greetingGlobalCooldownSeconds: Number.isNaN(humanizeGreetingGlobalCooldownValue) ? 75 : humanizeGreetingGlobalCooldownValue,
+                    greetingPlayerCooldownSeconds: Number.isNaN(humanizeGreetingPlayerCooldownValue) ? 240 : humanizeGreetingPlayerCooldownValue,
+                    greetingMessages: humanizeGreetingMessages.length > 0 ? humanizeGreetingMessages : ["hi", "hello", "来了", "有人来了", "你也在这啊", "我看看"]
                 },
                 safeIdle: {
                     intervalSeconds: Number.isNaN(safeIdleIntervalValue) ? 20 : safeIdleIntervalValue,
@@ -1315,6 +1354,58 @@ security:
                         onChange={(e) => setHumanizeSwingChance(e.target.value)}
                         placeholder="0.2"
                     />
+                </div>
+                <div className="rounded-md border p-3 space-y-3 md:col-span-2">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label>附近玩家随机打招呼</Label>
+                            <p className="text-xs text-muted-foreground">只在拟人/像玩家模式中触发，自动过滤 / 开头的命令。</p>
+                        </div>
+                        <Switch checked={humanizeGreetingEnabled} onCheckedChange={setHumanizeGreetingEnabled} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="space-y-2">
+                            <Label>说话概率 (0-1)</Label>
+                            <Input
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={humanizeGreetingChance}
+                                onChange={(e) => setHumanizeGreetingChance(e.target.value)}
+                                placeholder="0.35"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>全局冷却 (秒)</Label>
+                            <Input
+                                type="number"
+                                min="10"
+                                value={humanizeGreetingGlobalCooldown}
+                                onChange={(e) => setHumanizeGreetingGlobalCooldown(e.target.value)}
+                                placeholder="75"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>同玩家冷却 (秒)</Label>
+                            <Input
+                                type="number"
+                                min="30"
+                                value={humanizeGreetingPlayerCooldown}
+                                onChange={(e) => setHumanizeGreetingPlayerCooldown(e.target.value)}
+                                placeholder="240"
+                            />
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <Label>随机短句（一行一句）</Label>
+                        <Textarea
+                            value={humanizeGreetingMessagesText}
+                            onChange={(e) => setHumanizeGreetingMessagesText(e.target.value)}
+                            rows={5}
+                            placeholder={"hi\nhello\n来了"}
+                        />
+                    </div>
                 </div>
                 <div className="space-y-2">
                     <Label>安全挂机间隔 (秒)</Label>

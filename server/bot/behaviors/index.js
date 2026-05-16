@@ -984,11 +984,36 @@ export class HumanizeBehavior {
     this.playerReactionIntervalSeconds = 2;
     this.playerActionChance = 0.75;
     this.approachChance = 0.55;
+    this.greetingEnabled = true;
+    this.greetingChance = 0.35;
+    this.greetingGlobalCooldownSeconds = 75;
+    this.greetingPlayerCooldownSeconds = 240;
+    this.greetingMessages = [
+      'hi',
+      'hello',
+      '来了',
+      '有人来了',
+      '你也在这啊',
+      '我看看',
+      '路过一下',
+      '在忙啥呢',
+      '这边挺热闹',
+      '我刚到',
+      '别打我啊',
+      '一起看看',
+      '这地方不错',
+      '我站会儿',
+      '需要帮忙吗',
+      '你好呀'
+    ];
     this.timeout = null;
     this.reactionInterval = null;
+    this.greetingTimers = new Set();
     this.lastAction = null;
     this.lastReactedPlayer = null;
     this.lastInteractionAt = 0;
+    this.lastGreetingAt = 0;
+    this.playerGreetingTimes = new Map();
     this.lastPathAt = 0;
     this.pathGoalActive = false;
   }
@@ -1040,6 +1065,25 @@ export class HumanizeBehavior {
     }
     if (Number.isFinite(options.approachChance)) {
       this.approachChance = Math.min(1, Math.max(0, options.approachChance));
+    }
+    if (typeof options.greetingEnabled === 'boolean') {
+      this.greetingEnabled = options.greetingEnabled;
+    }
+    if (Number.isFinite(options.greetingChance)) {
+      this.greetingChance = Math.min(1, Math.max(0, options.greetingChance));
+    }
+    if (Number.isFinite(options.greetingGlobalCooldownSeconds)) {
+      this.greetingGlobalCooldownSeconds = Math.max(10, options.greetingGlobalCooldownSeconds);
+    }
+    if (Number.isFinite(options.greetingPlayerCooldownSeconds)) {
+      this.greetingPlayerCooldownSeconds = Math.max(30, options.greetingPlayerCooldownSeconds);
+    }
+    if (Array.isArray(options.greetingMessages)) {
+      const messages = options.greetingMessages
+        .map(message => String(message || '').trim())
+        .filter(message => message && !message.startsWith('/'))
+        .map(message => message.slice(0, 40));
+      if (messages.length > 0) this.greetingMessages = messages;
     }
 
     this.active = true;
@@ -1106,6 +1150,7 @@ export class HumanizeBehavior {
       this.lastInteractionAt = now;
       this.doPlayerReactionAction();
     }
+    this.tryGreetPlayer(player, now);
 
     if (distance <= this.approachStopDistance) {
       if (this.pathGoalActive && this.bot?.pathfinder) this.bot.pathfinder.stop();
@@ -1162,6 +1207,36 @@ export class HumanizeBehavior {
       this.doStep();
       this.lastAction = 'step_player';
     }
+  }
+
+  tryGreetPlayer(player, now = Date.now()) {
+    if (!this.greetingEnabled || !this.bot?.chat || !player?.entity) return;
+    const username = player.username || player.entity.username || player.entity.name;
+    if (!username || username === this.bot.username) return;
+    if (Math.random() > this.greetingChance) return;
+    if (now - this.lastGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return;
+    const lastPlayerGreetingAt = this.playerGreetingTimes.get(username) || 0;
+    if (now - lastPlayerGreetingAt < this.greetingPlayerCooldownSeconds * 1000) return;
+
+    const message = this.pickGreetingMessage();
+    if (!message) return;
+    this.lastGreetingAt = now;
+    this.playerGreetingTimes.set(username, now);
+    const delay = 500 + Math.random() * 1200;
+    const timer = setTimeout(() => {
+      if (!this.active || !this.bot?.chat) return;
+      this.bot.chat(message);
+      this.lastAction = 'greet_player';
+      this.greetingTimers.delete(timer);
+    }, delay);
+    this.greetingTimers.add(timer);
+    timer.unref?.();
+  }
+
+  pickGreetingMessage() {
+    const messages = this.greetingMessages.filter(message => message && !message.startsWith('/'));
+    if (messages.length === 0) return null;
+    return messages[Math.floor(Math.random() * messages.length)].slice(0, 40);
   }
 
   approachPlayer(entity) {
@@ -1261,6 +1336,10 @@ export class HumanizeBehavior {
       this.bot.pathfinder.stop();
       this.pathGoalActive = false;
     }
+    for (const timer of this.greetingTimers) {
+      clearTimeout(timer);
+    }
+    this.greetingTimers.clear();
     if (this.bot?.setControlState) {
       this.bot.setControlState('sneak', false);
       this.bot.setControlState('jump', false);
@@ -1280,6 +1359,11 @@ export class HumanizeBehavior {
       stepDurationMinMs: this.stepDurationMinMs,
       stepDurationMaxMs: this.stepDurationMaxMs,
       jumpUpEnabled: this.jumpUpEnabled,
+      greetingEnabled: this.greetingEnabled,
+      greetingChance: this.greetingChance,
+      greetingGlobalCooldownSeconds: this.greetingGlobalCooldownSeconds,
+      greetingPlayerCooldownSeconds: this.greetingPlayerCooldownSeconds,
+      greetingMessagesCount: this.greetingMessages.length,
       lastReactedPlayer: this.lastReactedPlayer,
       lastAction: this.lastAction
     };

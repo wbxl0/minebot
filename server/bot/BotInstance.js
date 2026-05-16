@@ -158,6 +158,11 @@ export class BotInstance {
         playerReactionIntervalSeconds: 2,
         playerActionChance: 0.75,
         approachChance: 0.55,
+        greetingEnabled: true,
+        greetingChance: 0.35,
+        greetingGlobalCooldownSeconds: 75,
+        greetingPlayerCooldownSeconds: 240,
+        greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀'],
         ...(config.behaviorSettings?.humanize || {})
       },
       safeIdle: {
@@ -2290,6 +2295,9 @@ export class BotInstance {
       const playerReactionIntervalSeconds = Number(settings.humanize.playerReactionIntervalSeconds);
       const playerActionChance = Number(settings.humanize.playerActionChance);
       const approachChance = Number(settings.humanize.approachChance);
+      const greetingChance = Number(settings.humanize.greetingChance);
+      const greetingGlobalCooldownSeconds = Number(settings.humanize.greetingGlobalCooldownSeconds);
+      const greetingPlayerCooldownSeconds = Number(settings.humanize.greetingPlayerCooldownSeconds);
       if (!Number.isNaN(intervalSeconds)) next.humanize.intervalSeconds = Math.max(5, intervalSeconds);
       if (!Number.isNaN(lookRange)) next.humanize.lookRange = Math.max(2, lookRange);
       if (!Number.isNaN(actionChance)) next.humanize.actionChance = Math.min(1, Math.max(0, actionChance));
@@ -2305,6 +2313,17 @@ export class BotInstance {
       if (!Number.isNaN(playerReactionIntervalSeconds)) next.humanize.playerReactionIntervalSeconds = Math.max(1, playerReactionIntervalSeconds);
       if (!Number.isNaN(playerActionChance)) next.humanize.playerActionChance = Math.min(1, Math.max(0, playerActionChance));
       if (!Number.isNaN(approachChance)) next.humanize.approachChance = Math.min(1, Math.max(0, approachChance));
+      if (typeof settings.humanize.greetingEnabled === 'boolean') next.humanize.greetingEnabled = settings.humanize.greetingEnabled;
+      if (!Number.isNaN(greetingChance)) next.humanize.greetingChance = Math.min(1, Math.max(0, greetingChance));
+      if (!Number.isNaN(greetingGlobalCooldownSeconds)) next.humanize.greetingGlobalCooldownSeconds = Math.max(10, greetingGlobalCooldownSeconds);
+      if (!Number.isNaN(greetingPlayerCooldownSeconds)) next.humanize.greetingPlayerCooldownSeconds = Math.max(30, greetingPlayerCooldownSeconds);
+      if (Array.isArray(settings.humanize.greetingMessages)) {
+        const greetingMessages = settings.humanize.greetingMessages
+          .map(message => String(message || '').trim())
+          .filter(message => message && !message.startsWith('/'))
+          .map(message => message.slice(0, 40));
+        if (greetingMessages.length > 0) next.humanize.greetingMessages = greetingMessages;
+      }
     }
 
     if (settings.safeIdle) {
