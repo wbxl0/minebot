@@ -14,6 +14,7 @@ const WATER_RESCUE_LOG_INTERVAL_MS = 10000;
 const WATER_ESCAPE_GOAL_INTERVAL_MS = 2500;
 const WATER_ESCAPE_SEARCH_RADIUS = 24;
 const WATER_ESCAPE_STUCK_MS = 7000;
+const WATER_ESCAPE_NEAR_GOAL_STUCK_MS = 2500;
 const WATER_BLOCK_NAMES = new Set(['water', 'bubble_column']);
 const DANGEROUS_WATER_RESCUE_BLOCKS = new Set([
   'lava',
@@ -56,6 +57,7 @@ export class BotInstance {
     this.waterEscapeGoal = null;
     this.waterRescueLastPosition = null;
     this.waterRescueLastMovedAt = 0;
+    this.waterRescueNearGoalSince = 0;
     this.waterRescueOriginalMovements = null;
     this.destroyed = false;
     this.spawnPosition = null; // 记录出生点用于巡逻
@@ -64,7 +66,6 @@ export class BotInstance {
     this.pendingCommandFeedback = null;
     this.commandFeedbackTimer = null;
     this.playerLikeStartedGuard = false;
-    this.playerLikeStartedAutoEat = false;
     this.recentServerMessages = [];
 
     // 每个机器人独立的日志
@@ -750,6 +751,7 @@ export class BotInstance {
     this.waterEscapeGoal = null;
     this.waterRescueLastPosition = null;
     this.waterRescueLastMovedAt = 0;
+    this.waterRescueNearGoalSince = 0;
     this.restoreWaterRescueMovements();
     if (wasActive && this.bot?.pathfinder) {
       this.bot.pathfinder.stop();
@@ -797,9 +799,10 @@ export class BotInstance {
     return below.boundingBox !== 'empty';
   }
 
-  findWaterEscapeGoal() {
+  findWaterEscapeGoal(minDistance = 0) {
     if (!this.bot?.entity?.position || typeof this.bot.blockAt !== 'function') return null;
     const origin = this.bot.entity.position.floored();
+    const current = this.bot.entity.position;
     let best = null;
     let bestScore = Infinity;
 
@@ -810,6 +813,8 @@ export class BotInstance {
           for (let dy = 3; dy >= -3; dy--) {
             const feetPos = origin.offset(dx, dy, dz);
             if (!this.isWaterEscapeStandable(feetPos)) continue;
+            const distance = current.distanceTo(feetPos.offset(0.5, 0, 0.5));
+            if (distance < minDistance) continue;
             const horizontal = Math.sqrt(dx * dx + dz * dz);
             const verticalPenalty = Math.abs(dy) * 1.5;
             const score = horizontal + verticalPenalty;
@@ -886,6 +891,7 @@ export class BotInstance {
       this.waterEscapeGoal = null;
       this.waterRescueLastPosition = this.bot.entity.position.clone();
       this.waterRescueLastMovedAt = now;
+      this.waterRescueNearGoalSince = 0;
       this.applyWaterRescueMovements();
     }
 
@@ -908,8 +914,25 @@ export class BotInstance {
       }
     }
 
+    if (this.waterEscapeGoal?.position) {
+      const goalDistance = this.bot.entity.position.distanceTo(this.waterEscapeGoal.position.offset(0.5, 0, 0.5));
+      if (goalDistance <= 2 && this.isBotInWater()) {
+        if (!this.waterRescueNearGoalSince) this.waterRescueNearGoalSince = now;
+        if (now - this.waterRescueNearGoalSince > WATER_ESCAPE_NEAR_GOAL_STUCK_MS) {
+          this.waterEscapeGoal = null;
+          this.lastWaterEscapeGoalAt = 0;
+          this.waterRescueNearGoalSince = 0;
+          if (this.bot.pathfinder) this.bot.pathfinder.stop();
+          this.log('warning', '水中自救已到岸边但仍在水中，重新寻找更远落脚点', '🛟');
+        }
+      } else {
+        this.waterRescueNearGoalSince = 0;
+      }
+    }
+
     if (this.bot.pathfinder && (!this.waterEscapeGoal || now - this.lastWaterEscapeGoalAt > WATER_ESCAPE_GOAL_INTERVAL_MS)) {
-      const escape = this.findWaterEscapeGoal();
+      const minDistance = this.isBotInWater() ? 2.5 : 0;
+      const escape = this.findWaterEscapeGoal(minDistance);
       if (escape) {
         this.waterEscapeGoal = escape;
         this.lastWaterEscapeGoalAt = now;
@@ -926,6 +949,7 @@ export class BotInstance {
     if (this.waterRescueLastMovedAt && now - this.waterRescueLastMovedAt > WATER_ESCAPE_STUCK_MS) {
       this.lastWaterEscapeGoalAt = 0;
       this.waterEscapeGoal = null;
+      this.waterRescueNearGoalSince = 0;
       this.waterRescueLastPosition = this.bot.entity.position.clone();
       this.waterRescueLastMovedAt = now;
       if (this.bot.pathfinder) this.bot.pathfinder.stop();
@@ -2355,7 +2379,6 @@ export class BotInstance {
     const humanizeOptions = this.behaviorSettings.humanize || {};
     const safeIdleOptions = this.behaviorSettings.safeIdle || {};
     const guardOptions = this.behaviorSettings.guard || {};
-    const autoEatOptions = this.behaviorSettings.autoEat || {};
     const humanizeResult = this.behaviors.humanize.active
       ? { success: true, message: '拟人已在运行' }
       : this.behaviors.humanize.start(humanizeOptions);
@@ -2367,17 +2390,12 @@ export class BotInstance {
       ? { success: true, message: '守护已在运行' }
       : this.behaviors.guard.start({ ...guardOptions, keepFightingAtLowHealth: true });
     this.playerLikeStartedGuard = !guardWasActive && guardResult.success;
-    const autoEatWasActive = this.behaviors.autoEat.active;
-    const autoEatResult = autoEatWasActive
-      ? { success: true, message: '自动吃已在运行' }
-      : this.behaviors.autoEat.start(autoEatOptions);
-    this.playerLikeStartedAutoEat = !autoEatWasActive && autoEatResult.success;
 
-    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success && !autoEatResult.success) {
-      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}; ${autoEatResult.message}` };
+    if (!humanizeResult.success && !safeIdleResult.success && !guardResult.success) {
+      return { success: false, message: `${humanizeResult.message}; ${safeIdleResult.message}; ${guardResult.message}` };
     }
 
-    return { success: true, message: '生存智能已开启，已启用防怪守护和自动进食' };
+    return { success: true, message: '生存智能已开启，已启用防怪守护' };
   }
 
   stopPlayerLikeBehaviors() {
@@ -2387,10 +2405,6 @@ export class BotInstance {
     if (this.playerLikeStartedGuard && this.behaviors.guard.active) {
       this.behaviors.guard.stop();
       this.playerLikeStartedGuard = false;
-    }
-    if (this.playerLikeStartedAutoEat && this.behaviors.autoEat.active) {
-      this.behaviors.autoEat.stop();
-      this.playerLikeStartedAutoEat = false;
     }
     return { success: true, message: '生存智能已关闭' };
   }
