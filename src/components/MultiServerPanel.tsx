@@ -171,14 +171,18 @@ function SortableServerCard({
 
       {/* 状态指示灯 */}
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(server)}`} />
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${getStatusColor(server)}`} />
           <Badge
             variant={server.connected || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
-            className="text-xs"
+            className="text-xs shrink-0"
           >
             {getStatusText(server)}
           </Badge>
+          <div className="flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
+            <Users className="h-3.5 w-3.5" />
+            <span>{playerCount}</span>
+          </div>
         </div>
         {server.type === "panel" && server.panelServerStats && (
           <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal">
@@ -193,10 +197,6 @@ function SortableServerCard({
         <h3 className="font-medium truncate mb-1">
           {server.name || server.id}
         </h3>
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Users className="h-3.5 w-3.5" />
-          <span>{playerCount} 人在线</span>
-        </div>
       </div>
 
       {/* 底部运行状态 (三元组网格) */}

@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { api, FileInfo } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { formatSize } from "@/lib/utils";
@@ -94,6 +95,10 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   const [originalContent, setOriginalContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadFileName, setUploadFileName] = useState("");
+  const [uploadIndex, setUploadIndex] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
 
   const { toast } = useToast();
 
@@ -435,12 +440,51 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
     }
   };
 
+  const uploadWithProgress = (url: string, options: { method: string; headers?: Record<string, string>; body: BodyInit }, onProgress: (percent: number) => void) => new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method, url);
+
+    Object.entries(options.headers || {}).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value);
+    });
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 204) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+
+      try {
+        const errorData = JSON.parse(xhr.responseText || "{}");
+        reject(new Error(errorData.error || `上传失败: ${xhr.statusText || xhr.status}`));
+      } catch {
+        reject(new Error(`上传失败: ${xhr.statusText || xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Failed to fetch"));
+    xhr.send(options.body);
+  });
+
   // 上传文件
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
 
+    const uploadFiles = Array.from(fileList);
     setUploading(true);
+    setUploadProgress(0);
+    setUploadIndex(1);
+    setUploadTotal(uploadFiles.length);
+    setUploadFileName(uploadFiles[0]?.name || "");
+
     try {
       // 获取上传信息
       const result = await api.getUploadUrl(serverId);
@@ -452,7 +496,9 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
 
       if (result.type === 'sftp' || result.type === 'agent') {
         // SFTP 模式：逐个上传到后端
-        for (const file of Array.from(fileList)) {
+        for (const [index, file] of uploadFiles.entries()) {
+          setUploadIndex(index + 1);
+          setUploadFileName(file.name);
           const uploadUrl = `${result.endpoint}?directory=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`;
           const headers: Record<string, string> = {
             'Content-Type': 'application/octet-stream',
@@ -460,16 +506,13 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
           if (token) {
             headers['Authorization'] = `Bearer ${token}`;
           }
-          const response = await fetch(uploadUrl, {
+          await uploadWithProgress(uploadUrl, {
             method: "POST",
             headers,
             body: file,
+          }, (fileProgress) => {
+            setUploadProgress(Math.round(((index + fileProgress / 100) / uploadFiles.length) * 100));
           });
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `上传失败: ${response.statusText}`);
-          }
         }
       } else {
         // 翼龙面板模式：同一次请求上传多个文件
@@ -477,20 +520,17 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
           throw new Error("无法获取上传链接");
         }
         const formData = new FormData();
-        Array.from(fileList).forEach(file => {
+        uploadFiles.forEach(file => {
           formData.append("files", file);
         });
 
+        setUploadIndex(1);
+        setUploadFileName(uploadFiles.length === 1 ? uploadFiles[0].name : `${uploadFiles.length} 个文件`);
         const uploadUrl = `${result.url}&directory=${encodeURIComponent(currentPath)}`;
-        const response = await fetch(uploadUrl, {
+        await uploadWithProgress(uploadUrl, {
           method: "POST",
           body: formData,
-        });
-
-        // 翼龙面板上传成功返回 204 No Content
-        if (!response.ok && response.status !== 204) {
-          throw new Error(`上传失败: ${response.statusText}`);
-        }
+        }, setUploadProgress);
       }
 
       toast({ title: "上传成功", description: `已上传 ${fileList.length} 个文件`, variant: "success" });
@@ -515,6 +555,10 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
       }
     } finally {
       setUploading(false);
+      setUploadProgress(0);
+      setUploadFileName("");
+      setUploadIndex(0);
+      setUploadTotal(0);
       e.target.value = "";
     }
   };
@@ -586,6 +630,18 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
   };
 
   const hasChanges = fileContent !== originalContent;
+
+  const uploadProgressView = uploading && (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2" role="status" aria-live="polite">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="truncate">
+          正在上传 {uploadTotal > 1 ? `${uploadIndex}/${uploadTotal} · ` : ""}{uploadFileName}
+        </span>
+        <span className="shrink-0 tabular-nums">{uploadProgress}%</span>
+      </div>
+      <Progress value={uploadProgress} className="h-2" aria-label="上传进度" />
+    </div>
+  );
 
   // compact 模式下的简化渲染
   if (compact) {
@@ -670,6 +726,8 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
               )}
             </div>
           </div>
+
+          {uploadProgressView}
 
           {/* 文件列表 */}
           <div className="border rounded-lg overflow-auto max-h-[calc(100vh-280px)]">
@@ -1030,6 +1088,8 @@ export function FileManager({ serverId, serverName, onClose, compact = false }: 
             )}
           </div>
         </div>
+
+        {uploadProgressView}
 
         {/* 文件列表 */}
         <div className="flex-1 min-h-0 border rounded-lg overflow-auto">
