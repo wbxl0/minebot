@@ -985,9 +985,9 @@ export class HumanizeBehavior {
     this.playerActionChance = 0.75;
     this.approachChance = 0.55;
     this.greetingEnabled = true;
-    this.greetingChance = 0.35;
-    this.greetingGlobalCooldownSeconds = 75;
-    this.greetingPlayerCooldownSeconds = 240;
+    this.greetingChance = 0.65;
+    this.greetingGlobalCooldownSeconds = 45;
+    this.greetingPlayerCooldownSeconds = 180;
     this.greetingMessages = [
       'hi',
       'hello',
@@ -1213,9 +1213,11 @@ export class HumanizeBehavior {
     if (!this.greetingEnabled || !this.bot?.chat || !player?.entity) return;
     const username = player.username || player.entity.username || player.entity.name;
     if (!username || username === this.bot.username) return;
-    if (Math.random() > this.greetingChance) return;
-    if (now - this.lastGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return;
     const lastPlayerGreetingAt = this.playerGreetingTimes.get(username) || 0;
+    const firstGreetingForPlayer = lastPlayerGreetingAt === 0;
+    const chance = firstGreetingForPlayer ? Math.max(this.greetingChance, 0.9) : this.greetingChance;
+    if (Math.random() > chance) return;
+    if (!firstGreetingForPlayer && now - this.lastGreetingAt < this.greetingGlobalCooldownSeconds * 1000) return;
     if (now - lastPlayerGreetingAt < this.greetingPlayerCooldownSeconds * 1000) return;
 
     const message = this.pickGreetingMessage();
@@ -1227,6 +1229,7 @@ export class HumanizeBehavior {
       if (!this.active || !this.bot?.chat) return;
       this.bot.chat(message);
       this.lastAction = 'greet_player';
+      if (this.log) this.log('chat', `向 ${username} 打招呼: ${message}`, '💬');
       this.greetingTimers.delete(timer);
     }, delay);
     this.greetingTimers.add(timer);

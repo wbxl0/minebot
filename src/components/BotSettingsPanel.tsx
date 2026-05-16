@@ -198,9 +198,9 @@ export function BotSettingsPanel({
     const [humanizeSneakChance, setHumanizeSneakChance] = useState<string>("0.2");
     const [humanizeSwingChance, setHumanizeSwingChance] = useState<string>("0.2");
     const [humanizeGreetingEnabled, setHumanizeGreetingEnabled] = useState<boolean>(true);
-    const [humanizeGreetingChance, setHumanizeGreetingChance] = useState<string>("0.35");
-    const [humanizeGreetingGlobalCooldown, setHumanizeGreetingGlobalCooldown] = useState<string>("75");
-    const [humanizeGreetingPlayerCooldown, setHumanizeGreetingPlayerCooldown] = useState<string>("240");
+    const [humanizeGreetingChance, setHumanizeGreetingChance] = useState<string>("0.65");
+    const [humanizeGreetingGlobalCooldown, setHumanizeGreetingGlobalCooldown] = useState<string>("45");
+    const [humanizeGreetingPlayerCooldown, setHumanizeGreetingPlayerCooldown] = useState<string>("180");
     const [humanizeGreetingMessagesText, setHumanizeGreetingMessagesText] = useState<string>("hi\nhello\n来了\n有人来了\n你也在这啊\n我看看\n路过一下\n在忙啥呢\n这边挺热闹\n我刚到\n别打我啊\n一起看看\n这地方不错\n我站会儿\n需要帮忙吗\n你好呀");
     const [safeIdleInterval, setSafeIdleInterval] = useState<string>("20");
     const [safeIdleLookRange, setSafeIdleLookRange] = useState<string>("6");
@@ -394,17 +394,17 @@ export function BotSettingsPanel({
                 setHumanizeGreetingChance(
                     settings.humanize?.greetingChance !== undefined
                         ? String(settings.humanize.greetingChance)
-                        : "0.35"
+                        : "0.65"
                 );
                 setHumanizeGreetingGlobalCooldown(
                     settings.humanize?.greetingGlobalCooldownSeconds !== undefined
                         ? String(settings.humanize.greetingGlobalCooldownSeconds)
-                        : "75"
+                        : "45"
                 );
                 setHumanizeGreetingPlayerCooldown(
                     settings.humanize?.greetingPlayerCooldownSeconds !== undefined
                         ? String(settings.humanize.greetingPlayerCooldownSeconds)
-                        : "240"
+                        : "180"
                 );
                 setHumanizeGreetingMessagesText(
                     Array.isArray(settings.humanize?.greetingMessages) && settings.humanize.greetingMessages.length > 0
@@ -845,9 +845,9 @@ export function BotSettingsPanel({
                     sneakChance: Number.isNaN(humanizeSneakChanceValue) ? 0.2 : humanizeSneakChanceValue,
                     swingChance: Number.isNaN(humanizeSwingChanceValue) ? 0.2 : humanizeSwingChanceValue,
                     greetingEnabled: humanizeGreetingEnabled,
-                    greetingChance: Number.isNaN(humanizeGreetingChanceValue) ? 0.35 : humanizeGreetingChanceValue,
-                    greetingGlobalCooldownSeconds: Number.isNaN(humanizeGreetingGlobalCooldownValue) ? 75 : humanizeGreetingGlobalCooldownValue,
-                    greetingPlayerCooldownSeconds: Number.isNaN(humanizeGreetingPlayerCooldownValue) ? 240 : humanizeGreetingPlayerCooldownValue,
+                    greetingChance: Number.isNaN(humanizeGreetingChanceValue) ? 0.65 : humanizeGreetingChanceValue,
+                    greetingGlobalCooldownSeconds: Number.isNaN(humanizeGreetingGlobalCooldownValue) ? 45 : humanizeGreetingGlobalCooldownValue,
+                    greetingPlayerCooldownSeconds: Number.isNaN(humanizeGreetingPlayerCooldownValue) ? 180 : humanizeGreetingPlayerCooldownValue,
                     greetingMessages: humanizeGreetingMessages.length > 0 ? humanizeGreetingMessages : ["hi", "hello", "来了", "有人来了", "你也在这啊", "我看看"]
                 },
                 safeIdle: {
@@ -1373,7 +1373,7 @@ security:
                                 step="0.05"
                                 value={humanizeGreetingChance}
                                 onChange={(e) => setHumanizeGreetingChance(e.target.value)}
-                                placeholder="0.35"
+                                placeholder="0.65"
                             />
                         </div>
                         <div className="space-y-2">
@@ -1383,7 +1383,7 @@ security:
                                 min="10"
                                 value={humanizeGreetingGlobalCooldown}
                                 onChange={(e) => setHumanizeGreetingGlobalCooldown(e.target.value)}
-                                placeholder="75"
+                                placeholder="45"
                             />
                         </div>
                         <div className="space-y-2">
@@ -1393,7 +1393,7 @@ security:
                                 min="30"
                                 value={humanizeGreetingPlayerCooldown}
                                 onChange={(e) => setHumanizeGreetingPlayerCooldown(e.target.value)}
-                                placeholder="240"
+                                placeholder="180"
                             />
                         </div>
                     </div>

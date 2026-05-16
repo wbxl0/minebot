@@ -502,9 +502,9 @@ export class ConfigManager {
           playerActionChance: 0.75,
           approachChance: 0.55,
           greetingEnabled: true,
-          greetingChance: 0.35,
-          greetingGlobalCooldownSeconds: 75,
-          greetingPlayerCooldownSeconds: 240,
+          greetingChance: 0.65,
+          greetingGlobalCooldownSeconds: 45,
+          greetingPlayerCooldownSeconds: 180,
           greetingMessages: ['hi', 'hello', '来了', '有人来了', '你也在这啊', '我看看', '路过一下', '在忙啥呢', '这边挺热闹', '我刚到', '别打我啊', '一起看看', '这地方不错', '我站会儿', '需要帮忙吗', '你好呀']
         },
         safeIdle: {
