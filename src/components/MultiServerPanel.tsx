@@ -18,6 +18,7 @@ import {
   Zap,
   Cpu,
   Activity,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -148,6 +149,7 @@ function SortableServerCard({
 
   const isPanel = server.type === "panel";
   const agentOnline = server.agentStatus?.connected;
+  const playerCount = server.players?.length || 0;
 
   return (
     <div
@@ -191,6 +193,10 @@ function SortableServerCard({
         <h3 className="font-medium truncate mb-1">
           {server.name || server.id}
         </h3>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Users className="h-3.5 w-3.5" />
+          <span>{playerCount} 人在线</span>
+        </div>
       </div>
 
       {/* 底部运行状态 (三元组网格) */}
