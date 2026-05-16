@@ -747,6 +747,9 @@ export class GuardBehavior {
     this.interval = null;
     this.lastTarget = null;
     this.lastPathTime = 0;
+    this.lastLoggedTarget = null;
+    this.lastTargetLogAt = 0;
+    this.lastAttackLogAt = 0;
   }
 
   start(options = {}) {
@@ -810,6 +813,7 @@ export class GuardBehavior {
     }
 
     this.lastTarget = target.username || target.name || target.type || 'unknown';
+    this.logTargetFound(this.lastTarget);
     const dist = this.bot.entity.position.distanceTo(target.position);
     if (dist > this.attackRange && this.bot?.pathfinder) {
       if (this.bot.getControlState?.('sprint')) {
@@ -822,15 +826,34 @@ export class GuardBehavior {
       this.lastPathTime = now;
       const goal = new this.goals.GoalFollow(target, 1);
       this.bot.pathfinder.setGoal(goal, true);
+      if (this.log) this.log('info', `守护靠近敌对生物: ${this.lastTarget}，距离 ${dist.toFixed(1)} 格`, '🛡️');
       return;
     }
 
     try {
       this.bot.lookAt(target.position.offset(0, target.height * 0.85, 0));
       this.bot.attack(target);
+      this.logAttack(this.lastTarget);
     } catch (e) {
       // ignore
     }
+  }
+
+  logTargetFound(targetName) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (targetName === this.lastLoggedTarget && now - this.lastTargetLogAt < 10000) return;
+    this.lastLoggedTarget = targetName;
+    this.lastTargetLogAt = now;
+    this.log('info', `守护发现敌对生物: ${targetName}`, '🛡️');
+  }
+
+  logAttack(targetName) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastAttackLogAt < 5000) return;
+    this.lastAttackLogAt = now;
+    this.log('info', `守护反击敌对生物: ${targetName}`, '⚔️');
   }
 
   autoStop(reason = 'unknown') {
@@ -1019,6 +1042,9 @@ export class HumanizeBehavior {
     this.lastLeaveGreetingAt = 0;
     this.lastHurtGreetingAt = 0;
     this.lastHurtReactionAt = 0;
+    this.lastLookLogAt = 0;
+    this.lastActionLogAt = 0;
+    this.lastApproachLogAt = 0;
     this.playerGreetingTimes = new Map();
     this.playerLeaveGreetingTimes = new Map();
     this.nearbyPlayerStates = new Map();
@@ -1167,6 +1193,7 @@ export class HumanizeBehavior {
     const distance = player.distance;
     this.lookAtPlayer(player.entity);
     this.lastReactedPlayer = player.username || player.entity.username || player.entity.name || null;
+    this.logLookAtPlayer(this.lastReactedPlayer, distance, now);
     const sceneMessageSent = this.trackNearbyPlayer(player, now);
 
     if (now - this.lastInteractionAt > 5000 && Math.random() < this.playerActionChance) {
@@ -1217,6 +1244,7 @@ export class HumanizeBehavior {
     const previous = this.nearbyPlayerStates.get(username);
     this.nearbyPlayerStates.set(username, { lastSeenAt: now, distance: player.distance });
     if (!previous || previous.distance > this.approachPlayerRange) {
+      if (this.log) this.log('info', `检测到玩家靠近: ${username}，距离 ${player.distance.toFixed(1)} 格`, '🧍');
       return this.trySceneMessage(username, this.approachGreetingMessages, 'approach', now);
     }
     return false;
@@ -1233,6 +1261,7 @@ export class HumanizeBehavior {
       if (currentNames.has(username)) continue;
       this.nearbyPlayerStates.delete(username);
       if (state.distance <= this.approachPlayerRange && now - state.lastSeenAt <= 15000) {
+        if (this.log) this.log('info', `玩家离开附近: ${username}`, '🧍');
         this.tryLeaveMessage(username, now);
       }
     }
@@ -1244,18 +1273,36 @@ export class HumanizeBehavior {
     this.lastAction = 'look_player';
   }
 
+  logLookAtPlayer(username, distance, now = Date.now()) {
+    if (!this.log || !username) return;
+    if (now - this.lastLookLogAt < 8000) return;
+    this.lastLookLogAt = now;
+    this.log('info', `像玩家观察附近玩家: ${username}，距离 ${distance.toFixed(1)} 格`, '🧍');
+  }
+
+  logHumanizeAction(message, now = Date.now()) {
+    if (!this.log) return;
+    if (now - this.lastActionLogAt < 6000) return;
+    this.lastActionLogAt = now;
+    this.log('info', message, '🧍');
+  }
+
   doPlayerReactionAction() {
     const roll = Math.random();
     if (roll < 0.35) {
       this.bot.swingArm();
       this.lastAction = 'wave_player';
+      this.logHumanizeAction('像玩家对附近玩家挥手');
     } else if (roll < 0.65) {
       this.doSneak(450, 'sneak_player');
+      this.logHumanizeAction('像玩家对附近玩家蹲下回应');
     } else if (roll < 0.85) {
       this.doJump();
+      this.logHumanizeAction('像玩家对附近玩家跳跃回应');
     } else if (!this.bot?.pathfinder?.isMoving?.()) {
       this.doStep();
       this.lastAction = 'step_player';
+      this.logHumanizeAction('像玩家在附近玩家旁边移动');
     }
   }
 
@@ -1345,6 +1392,7 @@ export class HumanizeBehavior {
     const player = this.findNearestPlayer(this.nearbyPlayerRange);
     if (player?.entity) this.lookAtPlayer(player.entity);
     this.doBackStep();
+    if (this.log) this.log('warning', '像玩家受到攻击，后退并观察附近目标', '🧍');
 
     if (now - this.lastHurtGreetingAt >= this.greetingGlobalCooldownSeconds * 1000) {
       const username = player?.username || player?.entity?.username || player?.entity?.name || '附近玩家';
@@ -1365,6 +1413,11 @@ export class HumanizeBehavior {
     this.bot.pathfinder.setGoal(goal, false);
     this.pathGoalActive = true;
     this.lastAction = 'approach_player';
+    const now = Date.now();
+    if (this.log && now - this.lastApproachLogAt > 7000) {
+      this.lastApproachLogAt = now;
+      this.log('info', '像玩家尝试靠近附近玩家', '🧍');
+    }
   }
 
   doLook() {
@@ -1574,6 +1627,7 @@ export class SafeIdleBehavior {
       this.pausedUntil = 0;
       this.doStep();
       this.lastAction = 'resume_step';
+      if (this.log) this.log('info', '安全挂机恢复轻微移动', '⛺');
       return;
     }
 
