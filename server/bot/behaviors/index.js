@@ -921,6 +921,8 @@ export class GuardBehavior {
     const lowHealth = typeof this.bot.health === 'number' && this.bot.health <= this.minHealth;
     if (strategy === 'avoid') {
       this.logAvoidTarget(this.lastTarget, dist);
+      if (this.bot?.pathfinder) this.bot.pathfinder.stop();
+      this.clearCombatControls();
       this.retreatFromTarget(target, 700);
       return;
     }
@@ -1237,6 +1239,7 @@ export class HumanizeBehavior {
     this.lastLookLogAt = 0;
     this.lastActionLogAt = 0;
     this.lastApproachLogAt = 0;
+    this.lastTrackedPlayerLogAt = 0;
     this.playerGreetingTimes = new Map();
     this.playerLeaveGreetingTimes = new Map();
     this.nearbyPlayerStates = new Map();
@@ -1390,7 +1393,7 @@ export class HumanizeBehavior {
     this.logLookAtPlayer(this.lastReactedPlayer, distance, now);
     const sceneMessageSent = this.trackNearbyPlayer(player, now);
 
-    if (now - this.lastInteractionAt > 5000 && Math.random() < this.playerActionChance) {
+    if (now - this.lastInteractionAt > 12000 && Math.random() < this.playerActionChance) {
       this.lastInteractionAt = now;
       this.doPlayerReactionAction();
     }
@@ -1404,7 +1407,7 @@ export class HumanizeBehavior {
 
     if (
       distance <= this.approachPlayerRange &&
-      now - this.lastPathAt > 7000 &&
+      now - this.lastPathAt > 15000 &&
       Math.random() < this.approachChance &&
       !this.bot?.pathfinder?.isMoving?.()
     ) {
@@ -1453,7 +1456,10 @@ export class HumanizeBehavior {
     const previous = this.nearbyPlayerStates.get(username);
     this.nearbyPlayerStates.set(username, { lastSeenAt: now, distance: player.distance });
     if (!previous || previous.distance > this.approachPlayerRange) {
-      if (this.log) this.log('info', `检测到玩家靠近: ${username}，距离 ${player.distance.toFixed(1)} 格`, '🧍');
+      if (this.log && now - this.lastTrackedPlayerLogAt > 30000) {
+        this.lastTrackedPlayerLogAt = now;
+        this.log('info', `检测到玩家靠近: ${username}，距离 ${player.distance.toFixed(1)} 格`, '🧍');
+      }
       return this.trySceneMessage(username, this.approachGreetingMessages, 'approach', now);
     }
     return false;
@@ -1489,14 +1495,14 @@ export class HumanizeBehavior {
 
   logLookAtPlayer(username, distance, now = Date.now()) {
     if (!this.log || !username) return;
-    if (now - this.lastLookLogAt < 8000) return;
+    if (now - this.lastLookLogAt < 20000) return;
     this.lastLookLogAt = now;
     this.log('info', `生存智能观察附近玩家: ${username}，距离 ${distance.toFixed(1)} 格`, '🧍');
   }
 
   logHumanizeAction(message, now = Date.now()) {
     if (!this.log) return;
-    if (now - this.lastActionLogAt < 6000) return;
+    if (now - this.lastActionLogAt < 12000) return;
     this.lastActionLogAt = now;
     this.log('info', message, '🧍');
   }
@@ -1608,7 +1614,7 @@ export class HumanizeBehavior {
 
   isSurvivalPriorityActive() {
     const health = typeof this.bot?.health === 'number' ? this.bot.health : 20;
-    return this.isBotInWater() || health <= 12 || this.hasNearbyHostile(8) || !!this.bot?.__autoEating;
+    return this.isBotInWater() || health <= 14 || this.hasNearbyHostile(10) || !!this.bot?.__autoEating;
   }
 
   bindHurtReaction() {
@@ -1904,7 +1910,7 @@ export class SafeIdleBehavior {
   isSurvivalPriorityActive() {
     if (!this.bot?.entity) return false;
     const health = typeof this.bot.health === 'number' ? this.bot.health : 20;
-    if (health <= 12 || this.bot.__autoEating) return true;
+    if (health <= 14 || this.bot.__autoEating) return true;
     if (this.bot.entity.isInWater) return true;
     const origin = this.bot.entity.position;
     return Object.values(this.bot.entities || {}).some(entity => (
