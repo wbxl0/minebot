@@ -174,21 +174,16 @@ function SortableServerCard({
           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${getStatusColor(server)}`} />
           <Badge
             variant={server.connected || (server.type === "panel" && server.tcpOnline) || agentOnline ? "default" : "secondary"}
-            className="text-xs shrink-0"
+            className="min-w-6 justify-center px-2 text-xs shrink-0 tabular-nums"
           >
-            {getStatusText(server)}
+            {playerCount}
           </Badge>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="min-w-6 rounded-full bg-emerald/15 px-2 py-0.5 text-center text-xs font-semibold text-emerald tabular-nums ring-1 ring-emerald/25">
-            {playerCount}
-          </div>
-          {server.type === "panel" && server.panelServerStats && (
-            <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal">
-              {formatUptime(server.panelServerStats.uptime)}
-            </Badge>
-          )}
-        </div>
+        {server.type === "panel" && server.panelServerStats && (
+          <Badge variant="secondary" className="text-xs bg-secondary/30 font-mono font-normal shrink-0">
+            {formatUptime(server.panelServerStats.uptime)}
+          </Badge>
+        )}
       </div>
 
       {/* 内容区域 (保持高度以对齐布局) */}
