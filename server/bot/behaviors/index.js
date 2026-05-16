@@ -792,6 +792,7 @@ export class GuardBehavior {
     this.lastApproachLogAt = 0;
     this.lastLowHealthLogAt = 0;
     this.lastRetreatAt = 0;
+    this.lastAvoidLogAt = 0;
     this.keepFightingAtLowHealth = false;
     this.preferredTargetId = null;
     this.onEntityHurtBound = null;
@@ -840,6 +841,19 @@ export class GuardBehavior {
     const feet = this.bot.blockAt(pos);
     const head = this.bot.blockAt(pos.offset(0, 1, 0));
     return feet?.name === 'water' || feet?.name === 'bubble_column' || head?.name === 'water' || head?.name === 'bubble_column';
+  }
+
+  getTargetStrategy(entity, dist) {
+    const name = this.getEntityName(entity).toLowerCase();
+    const highRisk = new Set(['enderman', 'creeper', 'witch']);
+    const ranged = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'ghast']);
+    if (highRisk.has(name)) {
+      return dist <= this.attackRange + 0.5 ? 'defend' : 'avoid';
+    }
+    if (ranged.has(name)) {
+      return dist <= this.attackRange + 0.5 ? 'defend' : 'avoid';
+    }
+    return 'attack';
   }
 
   bindHurtTargeting() {
@@ -903,7 +917,13 @@ export class GuardBehavior {
     this.lastTarget = this.getEntityName(target);
     this.logTargetFound(this.lastTarget);
     const dist = this.bot.entity.position.distanceTo(target.position);
+    const strategy = this.getTargetStrategy(target, dist);
     const lowHealth = typeof this.bot.health === 'number' && this.bot.health <= this.minHealth;
+    if (strategy === 'avoid') {
+      this.logAvoidTarget(this.lastTarget, dist);
+      this.retreatFromTarget(target, 700);
+      return;
+    }
     if (lowHealth && !this.keepFightingAtLowHealth) {
       if (this.bot?.pathfinder) this.bot.pathfinder.stop();
       this.clearCombatControls();
@@ -916,7 +936,7 @@ export class GuardBehavior {
       this.clearCombatControls();
       try {
         this.bot.lookAt(target.position.offset(0, target.height * 0.85, 0));
-        if (dist <= this.attackRange + 0.8) {
+        if (strategy === 'attack' && dist <= this.attackRange + 0.8) {
           this.bot.attack(target);
           this.logAttack(this.lastTarget);
         }
@@ -943,10 +963,11 @@ export class GuardBehavior {
 
     try {
       this.bot.lookAt(target.position.offset(0, target.height * 0.85, 0));
-      if (dist <= this.attackRange + 0.8) {
+      if (strategy === 'attack' && dist <= this.attackRange + 0.8) {
         this.bot.attack(target);
         this.logAttack(this.lastTarget);
       }
+      if (strategy === 'defend') this.retreatFromTarget(target, 650);
       if (lowHealth) this.retreatFromTarget(target);
     } catch (e) {
       // ignore
@@ -975,11 +996,20 @@ export class GuardBehavior {
     const now = Date.now();
     if (now - this.lastLowHealthLogAt < 8000) return;
     this.lastLowHealthLogAt = now;
-    this.log('warning', `生命值过低，继续防怪并尝试拉开距离: ${targetName}`, '🛡️');
+    this.log('warning', `生命值过低，停止追击并尝试拉开距离: ${targetName}`, '🛡️');
+  }
+
+  logAvoidTarget(targetName, dist) {
+    if (!this.log) return;
+    const now = Date.now();
+    if (now - this.lastAvoidLogAt < 5000) return;
+    this.lastAvoidLogAt = now;
+    this.log('warning', `守护避让高风险敌对生物: ${targetName}，距离 ${dist.toFixed(1)} 格`, '🛡️');
   }
 
   clearCombatControls() {
     if (!this.bot?.setControlState) return;
+    this.bot.setControlState('forward', false);
     this.bot.setControlState('sprint', false);
     this.bot.setControlState('jump', false);
     this.bot.setControlState('sneak', false);
@@ -988,7 +1018,7 @@ export class GuardBehavior {
     this.bot.setControlState('right', false);
   }
 
-  retreatFromTarget(target) {
+  retreatFromTarget(target, durationMs = 450) {
     if (!this.bot?.setControlState || !target?.position) return;
     const now = Date.now();
     if (now - this.lastRetreatAt < 900) return;
@@ -1004,7 +1034,7 @@ export class GuardBehavior {
       this.bot.setControlState('left', false);
       this.bot.setControlState('right', false);
       this.bot.setControlState('jump', false);
-    }, 450);
+    }, durationMs);
     timer.unref?.();
   }
 
